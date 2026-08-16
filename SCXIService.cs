@@ -4,14 +4,33 @@ internal sealed class ScxiService :
     private readonly SemaphoreSlim _operationLock =
         new(1, 1);
 
-    private ViiperProcessManager? _viiperManager;
 
-    private VirtualXboxController? _xbox;
-
-    private SteamRawInputListener? _listener;
+    private ViiperProcessManager?
+        _viiperManager;
 
 
-    public bool IsRunning { get; private set; }
+    private VirtualXboxController?
+        _xbox;
+
+
+    private SteamRawInputListener?
+        _listener;
+
+
+    public bool IsRunning
+    {
+        get;
+        private set;
+    }
+
+
+    // =================================================================
+    // PHYSICAL CONTROLLER STATUS
+    // =================================================================
+
+    public bool IsControllerDetected =>
+        IsRunning &&
+        _listener?.IsControllerConnected == true;
 
 
     // =================================================================
@@ -21,6 +40,7 @@ internal sealed class ScxiService :
     public async Task StartAsync()
     {
         await _operationLock.WaitAsync();
+
 
         try
         {
@@ -69,7 +89,7 @@ internal sealed class ScxiService :
 
 
                 // -----------------------------------------------------
-                // STEAM CONTROLLER INPUT
+                // PHYSICAL STEAM CONTROLLER LISTENER
                 // -----------------------------------------------------
 
                 listener =
@@ -101,11 +121,16 @@ internal sealed class ScxiService :
                 Console.WriteLine(
                     "[SCXI] Bridge enabled."
                 );
+
+
+                Console.WriteLine(
+                    "[SCXI] Waiting for Steam Controller..."
+                );
             }
             catch
             {
                 // -----------------------------------------------------
-                // CLEAN UP PARTIAL STARTUP
+                // PARTIAL STARTUP CLEANUP
                 // -----------------------------------------------------
 
                 if (listener is not null)
@@ -160,6 +185,7 @@ internal sealed class ScxiService :
     {
         await _operationLock.WaitAsync();
 
+
         try
         {
             if (!IsRunning &&
@@ -181,7 +207,7 @@ internal sealed class ScxiService :
 
 
             // ---------------------------------------------------------
-            // STOP RAW INPUT FIRST
+            // RAW INPUT
             // ---------------------------------------------------------
 
             SteamRawInputListener? listener =
@@ -205,7 +231,7 @@ internal sealed class ScxiService :
 
 
             // ---------------------------------------------------------
-            // RESET + REMOVE VIRTUAL XBOX CONTROLLER
+            // VIRTUAL XBOX
             // ---------------------------------------------------------
 
             VirtualXboxController? xbox =
@@ -229,7 +255,7 @@ internal sealed class ScxiService :
 
 
             // ---------------------------------------------------------
-            // STOP VIIPER ONLY IF SCXI STARTED IT
+            // VIIPER
             // ---------------------------------------------------------
 
             ViiperProcessManager? viiperManager =

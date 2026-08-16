@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+
     <TargetFramework>net10.0-windows</TargetFramework>
 
     <ImplicitUsings>enable</ImplicitUsings>
@@ -11,10 +12,22 @@
 
     <AssemblyName>SCXI</AssemblyName>
     <RootNamespace>SCXI</RootNamespace>
+
+    <ApplicationIcon>Assets\scxi-enabled.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Viiper.Client" Version="0.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\scxi-enabled.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+
+    <None Update="Assets\scxi-disabled.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

@@ -7,32 +7,56 @@ using System.Windows.Forms;
 // =====================================================================
 
 internal sealed class TrayApplicationContext :
-    ApplicationContext,
-    IDisposable
+    ApplicationContext
 {
     private readonly ScxiService _service =
         new();
 
 
-    private readonly NotifyIcon _notifyIcon;
+    private readonly NotifyIcon
+        _notifyIcon;
 
-    private readonly ContextMenuStrip _menu;
 
-    private readonly ToolStripMenuItem _statusItem;
+    private readonly ContextMenuStrip
+        _menu;
 
-    private readonly ToolStripMenuItem _enabledItem;
 
-    private readonly ToolStripMenuItem _refreshItem;
+    private readonly ToolStripMenuItem
+        _statusItem;
 
-    private readonly ToolStripMenuItem _quitItem;
+
+    private readonly ToolStripMenuItem
+        _enabledItem;
+
+
+    private readonly ToolStripMenuItem
+        _refreshItem;
+
+
+    private readonly ToolStripMenuItem
+        _quitItem;
 
 
     private readonly System.Windows.Forms.Timer
         _startupTimer;
 
 
+    // Poll physical-controller connection state.
+    private readonly System.Windows.Forms.Timer
+        _statusTimer;
+
+
+    private readonly Icon
+        _enabledIcon;
+
+
+    private readonly Icon
+        _disabledIcon;
+
+
     private bool _busy =
         false;
+
 
     private bool _quitting =
         false;
@@ -45,6 +69,22 @@ internal sealed class TrayApplicationContext :
     public TrayApplicationContext()
     {
         // =============================================================
+        // ICONS
+        // =============================================================
+
+        _enabledIcon =
+            LoadIcon(
+                "scxi-enabled.ico"
+            );
+
+
+        _disabledIcon =
+            LoadIcon(
+                "scxi-disabled.ico"
+            );
+
+
+        // =============================================================
         // STATUS
         // =============================================================
 
@@ -53,13 +93,12 @@ internal sealed class TrayApplicationContext :
                 "Status: Starting..."
             )
             {
-                Enabled =
-                    false
+                Enabled = false
             };
 
 
         // =============================================================
-        // ENABLE / DISABLE
+        // ENABLED
         // =============================================================
 
         _enabledItem =
@@ -67,11 +106,9 @@ internal sealed class TrayApplicationContext :
                 "Enabled"
             )
             {
-                Checked =
-                    false,
+                Checked = false,
 
-                CheckOnClick =
-                    false
+                CheckOnClick = false
             };
 
 
@@ -147,40 +184,29 @@ internal sealed class TrayApplicationContext :
 
         // =============================================================
         // TRAY ICON
-        //
-        // Temporary icon.
-        // Later we'll replace this with the actual SCXI icon.
         // =============================================================
 
         _notifyIcon =
             new NotifyIcon
             {
-                Icon =
-                    SystemIcons.Application,
+                Icon = _disabledIcon,
 
-                Text =
-                    "SCXI - Starting",
+                Text = "SCXI - Starting",
 
-                ContextMenuStrip =
-                    _menu,
+                ContextMenuStrip = _menu,
 
-                Visible =
-                    true
+                Visible = true
             };
 
 
         // =============================================================
         // STARTUP TIMER
-        //
-        // This allows the Windows Forms message loop to begin before
-        // we start the Raw Input listener.
         // =============================================================
 
         _startupTimer =
             new System.Windows.Forms.Timer
             {
-                Interval =
-                    100
+                Interval = 100
             };
 
 
@@ -189,6 +215,67 @@ internal sealed class TrayApplicationContext :
 
 
         _startupTimer.Start();
+
+
+        // =============================================================
+        // CONTROLLER STATUS TIMER
+        //
+        // Checks four times per second whether the physical
+        // Steam Controller is currently detected.
+        // =============================================================
+
+        _statusTimer =
+            new System.Windows.Forms.Timer
+            {
+                Interval = 250
+            };
+
+
+        _statusTimer.Tick +=
+            StatusTimer_Tick;
+
+
+        _statusTimer.Start();
+    }
+
+
+    // =================================================================
+    // ICON LOADER
+    // =================================================================
+
+    private static Icon LoadIcon(
+        string fileName
+    )
+    {
+        string path =
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Assets",
+                fileName
+            );
+
+
+        if (!File.Exists(path))
+        {
+            return (Icon)
+                SystemIcons.Application.Clone();
+        }
+
+
+        using var stream =
+            File.OpenRead(
+                path
+            );
+
+
+        using var icon =
+            new Icon(
+                stream
+            );
+
+
+        return (Icon)
+            icon.Clone();
     }
 
 
@@ -207,6 +294,26 @@ internal sealed class TrayApplicationContext :
         await SetEnabledAsync(
             true
         );
+    }
+
+
+    // =================================================================
+    // STATUS POLLING
+    // =================================================================
+
+    private void StatusTimer_Tick(
+        object? sender,
+        EventArgs e
+    )
+    {
+        if (_busy ||
+            _quitting)
+        {
+            return;
+        }
+
+
+        UpdateVisualState();
     }
 
 
@@ -263,6 +370,11 @@ internal sealed class TrayApplicationContext :
                     "SCXI - Starting";
 
 
+                SetTrayIcon(
+                    false
+                );
+
+
                 await _service
                     .StartAsync();
             }
@@ -276,12 +388,17 @@ internal sealed class TrayApplicationContext :
                     "SCXI - Stopping";
 
 
+                SetTrayIcon(
+                    false
+                );
+
+
                 await _service
                     .StopAsync();
             }
 
 
-            UpdateMenuState();
+            UpdateVisualState();
         }
         catch (Exception ex)
         {
@@ -300,6 +417,11 @@ internal sealed class TrayApplicationContext :
 
             _enabledItem.Checked =
                 false;
+
+
+            SetTrayIcon(
+                false
+            );
 
 
             _notifyIcon.BalloonTipTitle =
@@ -328,7 +450,101 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // REFRESH DEVICES
+    // VISUAL STATE
+    // =================================================================
+
+    private void UpdateVisualState()
+    {
+        // -------------------------------------------------------------
+        // BRIDGE DISABLED
+        // -------------------------------------------------------------
+
+        if (!_service.IsRunning)
+        {
+            _statusItem.Text =
+                "Status: Disabled";
+
+
+            _notifyIcon.Text =
+                "SCXI - Disabled";
+
+
+            _enabledItem.Checked =
+                false;
+
+
+            _refreshItem.Enabled =
+                false;
+
+
+            SetTrayIcon(
+                false
+            );
+
+
+            return;
+        }
+
+
+        // -------------------------------------------------------------
+        // BRIDGE ENABLED BUT NO PHYSICAL CONTROLLER
+        // -------------------------------------------------------------
+
+        if (!_service.IsControllerDetected)
+        {
+            _statusItem.Text =
+                "Status: Waiting for Steam Controller...";
+
+
+            _notifyIcon.Text =
+                "SCXI - Waiting for Controller";
+
+
+            _enabledItem.Checked =
+                true;
+
+
+            _refreshItem.Enabled =
+                true;
+
+
+            SetTrayIcon(
+                false
+            );
+
+
+            return;
+        }
+
+
+        // -------------------------------------------------------------
+        // PHYSICAL CONTROLLER DETECTED
+        // -------------------------------------------------------------
+
+        _statusItem.Text =
+            "Status: Controller Connected";
+
+
+        _notifyIcon.Text =
+            "SCXI - Controller Connected";
+
+
+        _enabledItem.Checked =
+            true;
+
+
+        _refreshItem.Enabled =
+            true;
+
+
+        SetTrayIcon(
+            true
+        );
+    }
+
+
+    // =================================================================
+    // REFRESH
     // =================================================================
 
     private async void RefreshItem_Click(
@@ -359,11 +575,16 @@ internal sealed class TrayApplicationContext :
                 "SCXI - Refreshing";
 
 
+            SetTrayIcon(
+                false
+            );
+
+
             await _service
                 .RefreshAsync();
 
 
-            UpdateMenuState();
+            UpdateVisualState();
         }
         catch (Exception ex)
         {
@@ -378,6 +599,11 @@ internal sealed class TrayApplicationContext :
 
             _notifyIcon.Text =
                 "SCXI - Error";
+
+
+            SetTrayIcon(
+                false
+            );
 
 
             _notifyIcon.BalloonTipTitle =
@@ -406,45 +632,17 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // UPDATE MENU
+    // ICON STATE
     // =================================================================
 
-    private void UpdateMenuState()
+    private void SetTrayIcon(
+        bool controllerConnected
+    )
     {
-        if (_service.IsRunning)
-        {
-            _statusItem.Text =
-                "Status: Enabled";
-
-
-            _notifyIcon.Text =
-                "SCXI - Enabled";
-
-
-            _enabledItem.Checked =
-                true;
-
-
-            _refreshItem.Enabled =
-                true;
-        }
-        else
-        {
-            _statusItem.Text =
-                "Status: Disabled";
-
-
-            _notifyIcon.Text =
-                "SCXI - Disabled";
-
-
-            _enabledItem.Checked =
-                false;
-
-
-            _refreshItem.Enabled =
-                false;
-        }
+        _notifyIcon.Icon =
+            controllerConnected
+                ? _enabledIcon
+                : _disabledIcon;
     }
 
 
@@ -512,6 +710,14 @@ internal sealed class TrayApplicationContext :
             "SCXI - Shutting down";
 
 
+        SetTrayIcon(
+            false
+        );
+
+
+        _statusTimer.Stop();
+
+
         try
         {
             await _service
@@ -522,17 +728,8 @@ internal sealed class TrayApplicationContext :
         }
 
 
-        _startupTimer.Dispose();
-
-
         _notifyIcon.Visible =
             false;
-
-
-        _notifyIcon.Dispose();
-
-
-        _menu.Dispose();
 
 
         ExitThread();
@@ -540,20 +737,38 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // DISPOSE
+    // CLEANUP
     // =================================================================
 
-    public new void Dispose()
+    protected override void Dispose(
+        bool disposing
+    )
     {
-        _startupTimer.Dispose();
+        if (disposing)
+        {
+            _startupTimer.Dispose();
 
-        _notifyIcon.Visible =
-            false;
+            _statusTimer.Dispose();
 
-        _notifyIcon.Dispose();
 
-        _menu.Dispose();
+            _notifyIcon.Visible =
+                false;
 
-        base.Dispose();
+
+            _notifyIcon.Dispose();
+
+
+            _menu.Dispose();
+
+
+            _enabledIcon.Dispose();
+
+            _disabledIcon.Dispose();
+        }
+
+
+        base.Dispose(
+            disposing
+        );
     }
 }
