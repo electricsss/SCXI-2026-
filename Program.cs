@@ -1,6 +1,9 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Channels;
 using System.Windows.Forms;
 
@@ -26,164 +29,227 @@ internal static class Program
         Console.WriteLine("==========================");
         Console.WriteLine();
 
-        Console.WriteLine("Connecting to VIIPER...");
-
-        var client = new ViiperClient(
-            "localhost",
-            3242
-        );
-
-
-        // =============================================================
-        // FIND OR CREATE VIIPER BUS
-        // =============================================================
-
-        var buses = await client.BusListAsync();
-
-        uint busId;
-
-        if (buses.Buses.Length == 0)
-        {
-            var bus = await client.BusCreateAsync(null);
-
-            busId = bus.BusID;
-
-            Console.WriteLine(
-                $"Created VIIPER bus {busId}");
-        }
-        else
-        {
-            busId = buses.Buses[0];
-
-            Console.WriteLine(
-                $"Using VIIPER bus {busId}");
-        }
-
-
-        // =============================================================
-        // CREATE VIRTUAL XBOX 360 CONTROLLER
-        // =============================================================
-
-        var request = new DeviceCreateRequest
-        {
-            Type = "xbox360"
-        };
-
-        var response = await client.BusDeviceAddAsync(
-            busId,
-            request
-        );
-
-        Console.WriteLine(
-            $"Created virtual Xbox controller: " +
-            $"{response.BusID}-{response.DevID}"
-        );
-
-
-        // =============================================================
-        // CONNECT TO VIRTUAL CONTROLLER
-        // =============================================================
-
-        await using var xbox =
-            await client.ConnectDeviceAsync(
-                busId,
-                response.DevID
-            );
-
-        Console.WriteLine(
-            "Virtual Xbox controller connected."
-        );
-
-        Console.WriteLine();
-
-
-        // =============================================================
-        // START RAW INPUT LISTENER
-        // =============================================================
-
-        using var listener =
-            new SteamRawInputListener(xbox);
-
-        Console.WriteLine(
-            "Waiting for Steam Controller..."
-        );
-
-        Console.WriteLine();
-
-        Console.WriteLine(
-            "Press Ctrl+C to stop SCXI."
-        );
-
-        Console.WriteLine();
-
-
-        // =============================================================
-        // CTRL+C HANDLER
-        // =============================================================
-
-        Console.CancelKeyPress += (_, e) =>
-        {
-            e.Cancel = true;
-
-            Application.Exit();
-        };
-
-
-        // =============================================================
-        // WINDOWS MESSAGE LOOP
-        // =============================================================
+        var viiperManager =
+            new ViiperProcessManager();
 
         try
         {
-            Application.Run(
-                new ApplicationContext()
+            // =========================================================
+            // MAKE SURE VIIPER IS AVAILABLE
+            // =========================================================
+
+            await viiperManager.EnsureRunningAsync();
+
+            Console.WriteLine();
+            Console.WriteLine(
+                "Connecting SCXI to VIIPER..."
+            );
+
+
+            var client =
+                new ViiperClient(
+                    "localhost",
+                    3242
+                );
+
+
+            // =========================================================
+            // FIND OR CREATE VIIPER BUS
+            // =========================================================
+
+            var buses =
+                await client.BusListAsync();
+
+            uint busId;
+
+            if (buses.Buses.Length == 0)
+            {
+                var bus =
+                    await client.BusCreateAsync(null);
+
+                busId =
+                    bus.BusID;
+
+                Console.WriteLine(
+                    $"Created VIIPER bus {busId}."
+                );
+            }
+            else
+            {
+                busId =
+                    buses.Buses[0];
+
+                Console.WriteLine(
+                    $"Using VIIPER bus {busId}."
+                );
+            }
+
+
+            // =========================================================
+            // CREATE VIRTUAL XBOX 360 CONTROLLER
+            // =========================================================
+
+            var request =
+                new DeviceCreateRequest
+                {
+                    Type = "xbox360"
+                };
+
+
+            var response =
+                await client.BusDeviceAddAsync(
+                    busId,
+                    request
+                );
+
+
+            Console.WriteLine(
+                $"Created virtual Xbox controller: " +
+                $"{response.BusID}-{response.DevID}"
+            );
+
+
+            // =========================================================
+            // CONNECT TO VIRTUAL CONTROLLER
+            // =========================================================
+
+            await using (
+                var xbox =
+                    await client.ConnectDeviceAsync(
+                        busId,
+                        response.DevID
+                    )
+            )
+            {
+                Console.WriteLine(
+                    "Virtual Xbox controller connected."
+                );
+
+                Console.WriteLine();
+
+
+                // =====================================================
+                // START STEAM CONTROLLER LISTENER
+                // =====================================================
+
+                using var listener =
+                    new SteamRawInputListener(
+                        xbox
+                    );
+
+
+                Console.WriteLine(
+                    "Waiting for Steam Controller..."
+                );
+
+                Console.WriteLine();
+
+                Console.WriteLine(
+                    "Press Ctrl+C to stop SCXI."
+                );
+
+                Console.WriteLine();
+
+
+                // =====================================================
+                // CTRL+C
+                // =====================================================
+
+                Console.CancelKeyPress += (_, e) =>
+                {
+                    e.Cancel = true;
+
+                    Application.Exit();
+                };
+
+
+                // =====================================================
+                // WINDOWS MESSAGE LOOP
+                // =====================================================
+
+                try
+                {
+                    Application.Run(
+                        new ApplicationContext()
+                    );
+                }
+                finally
+                {
+                    Console.WriteLine();
+                    Console.WriteLine(
+                        "[SCXI] Shutting down..."
+                    );
+
+
+                    // =================================================
+                    // RESET VIRTUAL CONTROLLER
+                    // =================================================
+
+                    try
+                    {
+                        await xbox.SendAsync(
+                            CreateNeutralXboxState()
+                        );
+
+                        Console.WriteLine(
+                            "[SCXI] Virtual Xbox state reset."
+                        );
+                    }
+                    catch
+                    {
+                    }
+
+
+                    // =================================================
+                    // REMOVE VIRTUAL CONTROLLER
+                    // =================================================
+
+                    try
+                    {
+                        await client.BusDeviceRemoveAsync(
+                            busId,
+                            response.DevID
+                        );
+
+                        Console.WriteLine(
+                            "[SCXI] Virtual controller removed."
+                        );
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine();
+            Console.WriteLine(
+                "[SCXI] Fatal error:"
+            );
+
+            Console.WriteLine(
+                ex.Message
             );
         }
         finally
         {
+            // =========================================================
+            // STOP VIIPER ONLY IF SCXI STARTED IT
+            // =========================================================
+
+            await viiperManager.StopIfOwnedAsync();
+
             Console.WriteLine();
             Console.WriteLine(
-                "Shutting down SCXI..."
-            );
-
-
-            // Release every virtual input.
-            try
-            {
-                await xbox.SendAsync(
-                    CreateNeutralXboxState()
-                );
-            }
-            catch
-            {
-            }
-
-
-            // Remove virtual Xbox controller.
-            try
-            {
-                await client.BusDeviceRemoveAsync(
-                    busId,
-                    response.DevID
-                );
-            }
-            catch
-            {
-            }
-
-
-            Console.WriteLine(
-                "Virtual controller removed."
-            );
-
-            Console.WriteLine(
-                "SCXI stopped."
+                "[SCXI] SCXI stopped."
             );
         }
     }
 
 
-    private static Xbox360Input CreateNeutralXboxState()
+    private static Xbox360Input
+        CreateNeutralXboxState()
     {
         return new Xbox360Input
         {
@@ -198,6 +264,537 @@ internal static class Program
             Rx = 0,
             Ry = 0
         };
+    }
+}
+
+
+// =====================================================================
+// VIIPER PROCESS MANAGER
+//
+// Rules:
+//
+// Existing VIIPER:
+//     SCXI uses it.
+//     SCXI does NOT stop it.
+//
+// No existing VIIPER:
+//     SCXI starts it.
+//     SCXI remembers the exact process.
+//     SCXI stops that exact process when SCXI exits.
+// =====================================================================
+
+internal sealed class ViiperProcessManager
+{
+    private const int ViiperApiPort =
+        3242;
+
+
+    private Process? _ownedProcess;
+
+
+    public bool StartedByScxi =>
+        _ownedProcess is not null;
+
+
+    // =================================================================
+    // ENSURE VIIPER IS AVAILABLE
+    // =================================================================
+
+    public async Task EnsureRunningAsync()
+    {
+        Console.WriteLine(
+            "[SCXI] Checking for VIIPER..."
+        );
+
+
+        if (await IsViiperRunningAsync())
+        {
+            Console.WriteLine(
+                "[SCXI] Existing VIIPER server detected."
+            );
+
+            Console.WriteLine(
+                "[SCXI] SCXI will not stop that instance on exit."
+            );
+
+            return;
+        }
+
+
+        Console.WriteLine(
+            "[SCXI] No VIIPER server detected."
+        );
+
+
+        string viiperPath =
+            FindViiperExecutable()
+            ?? throw new FileNotFoundException(
+                "Could not find viiper.exe. " +
+                "Expected it beside SCXI, under tools\\viiper, " +
+                "or in %LOCALAPPDATA%\\VIIPER."
+            );
+
+
+        Console.WriteLine(
+            $"[SCXI] Starting VIIPER:"
+        );
+
+        Console.WriteLine(
+            $"       {viiperPath}"
+        );
+
+
+        StartViiperProcess(
+            viiperPath
+        );
+
+
+        // =============================================================
+        // WAIT FOR API SERVER
+        // =============================================================
+
+        var timeout =
+            Stopwatch.StartNew();
+
+
+        while (timeout.Elapsed <
+            TimeSpan.FromSeconds(10))
+        {
+            if (_ownedProcess is not null &&
+                _ownedProcess.HasExited)
+            {
+                throw new Exception(
+                    "VIIPER exited before its API server became ready. " +
+                    $"Exit code: {_ownedProcess.ExitCode}"
+                );
+            }
+
+
+            if (await IsViiperRunningAsync())
+            {
+                Console.WriteLine(
+                    $"[SCXI] VIIPER ready. " +
+                    $"PID {_ownedProcess?.Id}."
+                );
+
+                return;
+            }
+
+
+            await Task.Delay(
+                200
+            );
+        }
+
+
+        throw new TimeoutException(
+            "VIIPER did not become ready within 10 seconds."
+        );
+    }
+
+
+    // =================================================================
+    // START VIIPER
+    // =================================================================
+
+    private void StartViiperProcess(
+        string viiperPath
+    )
+    {
+        var startInfo =
+            new ProcessStartInfo
+            {
+                FileName =
+                    viiperPath,
+
+                Arguments =
+                    "server",
+
+                UseShellExecute =
+                    false,
+
+                CreateNoWindow =
+                    true,
+
+                WindowStyle =
+                    ProcessWindowStyle.Hidden,
+
+                RedirectStandardOutput =
+                    true,
+
+                RedirectStandardError =
+                    true,
+
+                WorkingDirectory =
+                    Path.GetDirectoryName(
+                        viiperPath
+                    )
+                    ?? AppContext.BaseDirectory
+            };
+
+
+        // =============================================================
+        // ENSURE VIIPER CAN FIND USBIP.EXE
+        //
+        // Your current usbip-win2 installation lives here, but it
+        // wasn't globally added to PATH.
+        // =============================================================
+
+        string usbipDirectory =
+            Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.ProgramFiles
+                ),
+                "USBip"
+            );
+
+
+        if (Directory.Exists(
+                usbipDirectory
+            ))
+        {
+            string currentPath =
+                startInfo.Environment.ContainsKey(
+                    "PATH"
+                )
+                    ? startInfo.Environment["PATH"] ?? ""
+                    : Environment.GetEnvironmentVariable(
+                        "PATH"
+                    ) ?? "";
+
+
+            if (!currentPath.Contains(
+                    usbipDirectory,
+                    StringComparison.OrdinalIgnoreCase
+                ))
+            {
+                startInfo.Environment["PATH"] =
+                    currentPath +
+                    Path.PathSeparator +
+                    usbipDirectory;
+            }
+        }
+
+
+        var process =
+            new Process
+            {
+                StartInfo =
+                    startInfo,
+
+                EnableRaisingEvents =
+                    true
+            };
+
+
+        process.OutputDataReceived +=
+            (_, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(
+                        e.Data
+                    ))
+                {
+                    Console.WriteLine(
+                        $"[VIIPER] {e.Data}"
+                    );
+                }
+            };
+
+
+        process.ErrorDataReceived +=
+            (_, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(
+                        e.Data
+                    ))
+                {
+                    Console.WriteLine(
+                        $"[VIIPER] {e.Data}"
+                    );
+                }
+            };
+
+
+        if (!process.Start())
+        {
+            process.Dispose();
+
+            throw new Exception(
+                "Windows could not start VIIPER."
+            );
+        }
+
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+
+        _ownedProcess =
+            process;
+    }
+
+
+    // =================================================================
+    // FIND VIIPER.EXE
+    // =================================================================
+
+    private static string?
+        FindViiperExecutable()
+    {
+        // -------------------------------------------------------------
+        // Future packaged SCXI:
+        // SCXI.exe + viiper.exe
+        // -------------------------------------------------------------
+
+        string besideScxi =
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "viiper.exe"
+            );
+
+
+        if (File.Exists(
+                besideScxi
+            ))
+        {
+            return besideScxi;
+        }
+
+
+        // -------------------------------------------------------------
+        // Development / portable tools directory
+        // -------------------------------------------------------------
+
+        string toolsDirectory =
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "tools",
+                "viiper",
+                "viiper.exe"
+            );
+
+
+        if (File.Exists(
+                toolsDirectory
+            ))
+        {
+            return toolsDirectory;
+        }
+
+
+        // -------------------------------------------------------------
+        // Official Windows VIIPER install location
+        // -------------------------------------------------------------
+
+        string localAppData =
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData
+            );
+
+
+        string installedViiper =
+            Path.Combine(
+                localAppData,
+                "VIIPER",
+                "viiper.exe"
+            );
+
+
+        if (File.Exists(
+                installedViiper
+            ))
+        {
+            return installedViiper;
+        }
+
+
+        return null;
+    }
+
+
+    // =================================================================
+    // PING VIIPER
+    // =================================================================
+
+    private static async Task<bool>
+        IsViiperRunningAsync()
+    {
+        try
+        {
+            using var timeout =
+                new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(
+                        500
+                    )
+                );
+
+
+            using var client =
+                new TcpClient();
+
+
+            await client.ConnectAsync(
+                "127.0.0.1",
+                ViiperApiPort,
+                timeout.Token
+            );
+
+
+            using NetworkStream stream =
+                client.GetStream();
+
+
+            byte[] request =
+                Encoding.UTF8.GetBytes(
+                    "ping\0"
+                );
+
+
+            await stream.WriteAsync(
+                request,
+                timeout.Token
+            );
+
+
+            await stream.FlushAsync(
+                timeout.Token
+            );
+
+
+            byte[] response =
+                new byte[1024];
+
+
+            int count =
+                await stream.ReadAsync(
+                    response,
+                    timeout.Token
+                );
+
+
+            if (count <= 0)
+            {
+                return false;
+            }
+
+
+            string text =
+                Encoding.UTF8.GetString(
+                    response,
+                    0,
+                    count
+                );
+
+
+            return text.Contains(
+                "VIIPER",
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+
+    // =================================================================
+    // STOP OWNED VIIPER
+    // =================================================================
+
+    public async Task StopIfOwnedAsync()
+    {
+        Process? process =
+            _ownedProcess;
+
+
+        _ownedProcess =
+            null;
+
+
+        if (process is null)
+        {
+            return;
+        }
+
+
+        try
+        {
+            if (process.HasExited)
+            {
+                Console.WriteLine(
+                    "[SCXI] VIIPER already stopped."
+                );
+
+                return;
+            }
+
+
+            int pid =
+                process.Id;
+
+
+            Console.WriteLine(
+                $"[SCXI] Stopping VIIPER PID {pid}..."
+            );
+
+
+            // ---------------------------------------------------------
+            // We kill ONLY the exact Process object SCXI created.
+            //
+            // We deliberately do NOT use:
+            //
+            // taskkill /IM viiper.exe
+            //
+            // because that could terminate another application's
+            // VIIPER server.
+            // ---------------------------------------------------------
+
+            process.Kill(
+                entireProcessTree: true
+            );
+
+
+            using var timeout =
+                new CancellationTokenSource(
+                    TimeSpan.FromSeconds(3)
+                );
+
+
+            try
+            {
+                await process.WaitForExitAsync(
+                    timeout.Token
+                );
+            }
+            catch (
+                OperationCanceledException
+            )
+            {
+                Console.WriteLine(
+                    "[SCXI] VIIPER shutdown timed out."
+                );
+            }
+
+
+            if (process.HasExited)
+            {
+                Console.WriteLine(
+                    "[SCXI] VIIPER stopped."
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"[SCXI] Could not stop VIIPER: " +
+                $"{ex.Message}"
+            );
+        }
+        finally
+        {
+            process.Dispose();
+        }
     }
 }
 
@@ -226,8 +823,6 @@ internal sealed class SteamRawInputListener :
         0x00000100;
 
 
-    // No valid state packet for 1 second =
-    // controller considered disconnected.
     private const long DisconnectTimeoutMs =
         1000;
 
@@ -239,24 +834,30 @@ internal sealed class SteamRawInputListener :
     // CONNECTION STATE
     // =================================================================
 
-    private long _lastPacketTick = 0;
+    private long _lastPacketTick =
+        0;
 
-    // 0 = disconnected
-    // 1 = connected
-    private int _controllerConnected = 0;
+
+    private int _controllerConnected =
+        0;
+
 
     private readonly System.Threading.Timer
         _disconnectTimer;
 
 
     // =================================================================
-    // LAST INPUT STATE
+    // LAST CONTROLLER STATE
     // =================================================================
 
-    private readonly object _stateLock =
-        new();
+    private readonly object
+        _stateLock =
+            new();
 
-    private SteamGamepadState _lastState;
+
+    private SteamGamepadState
+        _lastState;
+
 
     private bool _hasLastState =
         false;
@@ -264,9 +865,6 @@ internal sealed class SteamRawInputListener :
 
     // =================================================================
     // OUTPUT QUEUE
-    //
-    // Keep only the newest controller state.
-    // This prevents input latency from building up.
     // =================================================================
 
     private readonly Channel<Xbox360Input>
@@ -274,20 +872,25 @@ internal sealed class SteamRawInputListener :
             Channel.CreateBounded<Xbox360Input>(
                 new BoundedChannelOptions(1)
                 {
-                    SingleReader = true,
-                    SingleWriter = false,
+                    SingleReader =
+                        true,
+
+                    SingleWriter =
+                        false,
 
                     FullMode =
-                        BoundedChannelFullMode.DropOldest
+                        BoundedChannelFullMode
+                            .DropOldest
                 }
             );
 
 
-    private readonly Task _senderTask;
+    private readonly Task
+        _senderTask;
 
 
     // =================================================================
-    // INTERNAL CONTROLLER STATE
+    // INTERNAL STATE
     // =================================================================
 
     private readonly record struct SteamGamepadState(
@@ -305,7 +908,7 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // WINDOWS RAW INPUT STRUCTURES
+    // RAW INPUT STRUCTURES
     // =================================================================
 
     [StructLayout(LayoutKind.Sequential)]
@@ -342,24 +945,26 @@ internal sealed class SteamRawInputListener :
         "user32.dll",
         SetLastError = true
     )]
-    private static extern bool RegisterRawInputDevices(
-        RAWINPUTDEVICE[] pRawInputDevices,
-        uint uiNumDevices,
-        uint cbSize
-    );
+    private static extern bool
+        RegisterRawInputDevices(
+            RAWINPUTDEVICE[] pRawInputDevices,
+            uint uiNumDevices,
+            uint cbSize
+        );
 
 
     [DllImport(
         "user32.dll",
         SetLastError = true
     )]
-    private static extern uint GetRawInputData(
-        IntPtr hRawInput,
-        uint uiCommand,
-        IntPtr pData,
-        ref uint pcbSize,
-        uint cbSizeHeader
-    );
+    private static extern uint
+        GetRawInputData(
+            IntPtr hRawInput,
+            uint uiCommand,
+            IntPtr pData,
+            ref uint pcbSize,
+            uint cbSizeHeader
+        );
 
 
     [DllImport(
@@ -367,12 +972,13 @@ internal sealed class SteamRawInputListener :
         CharSet = CharSet.Unicode,
         SetLastError = true
     )]
-    private static extern uint GetRawInputDeviceInfo(
-        IntPtr hDevice,
-        uint uiCommand,
-        IntPtr pData,
-        ref uint pcbSize
-    );
+    private static extern uint
+        GetRawInputDeviceInfo(
+            IntPtr hDevice,
+            uint uiCommand,
+            IntPtr pData,
+            ref uint pcbSize
+        );
 
 
     // =================================================================
@@ -383,27 +989,29 @@ internal sealed class SteamRawInputListener :
         ViiperDevice xbox
     )
     {
-        _xbox = xbox;
+        _xbox =
+            xbox;
 
 
-        // Hidden window that receives WM_INPUT.
         CreateHandle(
             new CreateParams
             {
-                Caption = "SCXI_RawInput"
+                Caption =
+                    "SCXI_RawInput"
             }
         );
 
 
-        // Listen for Valve's vendor-defined HID collection.
         var devices =
             new[]
             {
                 new RAWINPUTDEVICE
                 {
-                    usUsagePage = 0xFF00,
+                    usUsagePage =
+                        0xFF00,
 
-                    usUsage = 0x0001,
+                    usUsage =
+                        0x0001,
 
                     dwFlags =
                         RIDEV_INPUTSINK,
@@ -417,7 +1025,8 @@ internal sealed class SteamRawInputListener :
         if (!RegisterRawInputDevices(
                 devices,
                 (uint)devices.Length,
-                (uint)Marshal.SizeOf<RAWINPUTDEVICE>()
+                (uint)Marshal.SizeOf<
+                    RAWINPUTDEVICE>()
             ))
         {
             throw new Win32Exception(
@@ -426,13 +1035,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // Start virtual Xbox sender.
         _senderTask =
-            Task.Run(SenderLoopAsync);
+            Task.Run(
+                SenderLoopAsync
+            );
 
 
-        // Check for controller disappearance
-        // four times per second.
         _disconnectTimer =
             new System.Threading.Timer(
                 CheckForDisconnect,
@@ -444,19 +1052,21 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // WINDOWS MESSAGE HANDLER
+    // WINDOWS MESSAGE LOOP
     // =================================================================
 
     protected override void WndProc(
         ref Message m
     )
     {
-        if (m.Msg == WM_INPUT)
+        if (m.Msg ==
+            WM_INPUT)
         {
             ProcessRawInput(
                 m.LParam
             );
         }
+
 
         base.WndProc(
             ref m
@@ -465,7 +1075,7 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // PROCESS WINDOWS RAW INPUT
+    // PROCESS RAW INPUT
     // =================================================================
 
     private void ProcessRawInput(
@@ -473,9 +1083,12 @@ internal sealed class SteamRawInputListener :
     )
     {
         uint headerSize =
-            (uint)Marshal.SizeOf<RAWINPUTHEADER>();
+            (uint)Marshal.SizeOf<
+                RAWINPUTHEADER>();
 
-        uint totalSize = 0;
+
+        uint totalSize =
+            0;
 
 
         uint result =
@@ -513,16 +1126,18 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            if (result == uint.MaxValue)
+            if (result ==
+                uint.MaxValue)
             {
                 return;
             }
 
 
             var header =
-                Marshal.PtrToStructure<RAWINPUTHEADER>(
-                    buffer
-                );
+                Marshal.PtrToStructure<
+                    RAWINPUTHEADER>(
+                        buffer
+                    );
 
 
             if (header.dwType !=
@@ -538,10 +1153,10 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            // Only process the 2026 Steam Controller puck.
             if (!path.Contains(
                     "VID_28DE&PID_1304",
-                    StringComparison.OrdinalIgnoreCase
+                    StringComparison
+                        .OrdinalIgnoreCase
                 ))
             {
                 return;
@@ -549,7 +1164,8 @@ internal sealed class SteamRawInputListener :
 
 
             int hidOffset =
-                Marshal.SizeOf<RAWINPUTHEADER>();
+                Marshal.SizeOf<
+                    RAWINPUTHEADER>();
 
 
             if (totalSize <
@@ -595,7 +1211,8 @@ internal sealed class SteamRawInputListener :
                     (int)(i * reportSize);
 
 
-                if (offset + reportSize >
+                if (offset +
+                    reportSize >
                     totalSize)
                 {
                     break;
@@ -603,7 +1220,9 @@ internal sealed class SteamRawInputListener :
 
 
                 byte[] report =
-                    new byte[reportSize];
+                    new byte[
+                        reportSize
+                    ];
 
 
                 Marshal.Copy(
@@ -632,22 +1251,24 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // STEAM CONTROLLER REPORT -> XBOX STATE
+    // STEAM CONTROLLER -> XBOX STATE
     // =================================================================
 
     private void HandleSteamReport(
         byte[] report
     )
     {
-        if (report.Length < 18)
+        if (report.Length <
+            18)
         {
             return;
         }
 
 
-        // Valid controller state reports.
-        if (report[0] != 0x42 &&
-            report[0] != 0x45)
+        if (report[0] !=
+                0x42 &&
+            report[0] !=
+                0x45)
         {
             return;
         }
@@ -673,10 +1294,6 @@ internal sealed class SteamRawInputListener :
         byte b2 =
             report[4];
 
-
-        // -------------------------------------------------------------
-        // A / B / X / Y
-        // -------------------------------------------------------------
 
         if ((b0 & 0x01) != 0)
         {
@@ -706,20 +1323,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // -------------------------------------------------------------
-        // RIGHT STICK CLICK
-        // -------------------------------------------------------------
-
         if ((b0 & 0x20) != 0)
         {
             buttons |=
                 (uint)XboxButton.RThumb;
         }
 
-
-        // -------------------------------------------------------------
-        // MENU -> START
-        // -------------------------------------------------------------
 
         if ((b0 & 0x40) != 0)
         {
@@ -728,20 +1337,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // -------------------------------------------------------------
-        // RIGHT BUMPER
-        // -------------------------------------------------------------
-
         if ((b1 & 0x02) != 0)
         {
             buttons |=
                 (uint)XboxButton.RShoulder;
         }
 
-
-        // -------------------------------------------------------------
-        // D-PAD
-        // -------------------------------------------------------------
 
         if ((b1 & 0x04) != 0)
         {
@@ -771,20 +1372,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // -------------------------------------------------------------
-        // VIEW -> BACK
-        // -------------------------------------------------------------
-
         if ((b1 & 0x40) != 0)
         {
             buttons |=
                 (uint)XboxButton.Back;
         }
 
-
-        // -------------------------------------------------------------
-        // LEFT STICK CLICK
-        // -------------------------------------------------------------
 
         if ((b1 & 0x80) != 0)
         {
@@ -793,20 +1386,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // -------------------------------------------------------------
-        // STEAM -> GUIDE
-        // -------------------------------------------------------------
-
         if ((b2 & 0x01) != 0)
         {
             buttons |=
                 (uint)XboxButton.Guide;
         }
 
-
-        // -------------------------------------------------------------
-        // LEFT BUMPER
-        // -------------------------------------------------------------
 
         if ((b2 & 0x08) != 0)
         {
@@ -878,7 +1463,7 @@ internal sealed class SteamRawInputListener :
 
 
         // =============================================================
-        // CREATE CURRENT STATE
+        // BUILD STATE
         // =============================================================
 
         var state =
@@ -900,7 +1485,8 @@ internal sealed class SteamRawInputListener :
         {
             shouldSend =
                 !_hasLastState ||
-                _lastState != state;
+                _lastState !=
+                    state;
 
 
             if (shouldSend)
@@ -940,11 +1526,12 @@ internal sealed class SteamRawInputListener :
         );
 
 
-        // First packet after being disconnected.
-        if (System.Threading.Interlocked.Exchange(
+        if (
+            System.Threading.Interlocked.Exchange(
                 ref _controllerConnected,
                 1
-            ) == 0)
+            ) == 0
+        )
         {
             lock (_stateLock)
             {
@@ -964,9 +1551,11 @@ internal sealed class SteamRawInputListener :
         object? state
     )
     {
-        if (System.Threading.Volatile.Read(
+        if (
+            System.Threading.Volatile.Read(
                 ref _controllerConnected
-            ) == 0)
+            ) == 0
+        )
         {
             return;
         }
@@ -996,12 +1585,12 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // Make sure the disconnect handler
-        // only runs once.
-        if (System.Threading.Interlocked.Exchange(
+        if (
+            System.Threading.Interlocked.Exchange(
                 ref _controllerConnected,
                 0
-            ) != 1)
+            ) != 1
+        )
         {
             return;
         }
@@ -1014,7 +1603,6 @@ internal sealed class SteamRawInputListener :
         }
 
 
-        // Immediately reset every virtual input.
         _stateChannel.Writer.TryWrite(
             CreateNeutralXboxState()
         );
@@ -1048,7 +1636,8 @@ internal sealed class SteamRawInputListener :
 
 
         return (byte)Math.Clamp(
-            (value * 255) / 32767,
+            (value * 255) /
+                32767,
             0,
             255
         );
@@ -1056,12 +1645,13 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // XBOX STATE CREATION
+    // XBOX STATES
     // =================================================================
 
-    private static Xbox360Input CreateXboxState(
-        SteamGamepadState state
-    )
+    private static Xbox360Input
+        CreateXboxState(
+            SteamGamepadState state
+        )
     {
         return new Xbox360Input
         {
@@ -1089,7 +1679,8 @@ internal sealed class SteamRawInputListener :
     }
 
 
-    private static Xbox360Input CreateNeutralXboxState()
+    private static Xbox360Input
+        CreateNeutralXboxState()
     {
         return new Xbox360Input
         {
@@ -1111,11 +1702,14 @@ internal sealed class SteamRawInputListener :
     // VIIPER OUTPUT LOOP
     // =================================================================
 
-    private async Task SenderLoopAsync()
+    private async Task
+        SenderLoopAsync()
     {
         await foreach (
             Xbox360Input state in
-            _stateChannel.Reader.ReadAllAsync()
+            _stateChannel
+                .Reader
+                .ReadAllAsync()
         )
         {
             try
@@ -1136,12 +1730,13 @@ internal sealed class SteamRawInputListener :
 
 
     // =================================================================
-    // GET RAW INPUT DEVICE PATH
+    // DEVICE PATH
     // =================================================================
 
-    private static string GetDeviceName(
-        IntPtr device
-    )
+    private static string
+        GetDeviceName(
+            IntPtr device
+        )
     {
         uint size =
             0;
@@ -1178,7 +1773,8 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            if (result == uint.MaxValue)
+            if (result ==
+                uint.MaxValue)
             {
                 return "";
             }
@@ -1208,7 +1804,9 @@ internal sealed class SteamRawInputListener :
         _disconnectTimer.Dispose();
 
 
-        _stateChannel.Writer.TryComplete();
+        _stateChannel
+            .Writer
+            .TryComplete();
 
 
         try
