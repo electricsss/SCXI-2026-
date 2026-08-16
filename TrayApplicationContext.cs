@@ -9,9 +9,22 @@ using System.Windows.Forms;
 internal sealed class TrayApplicationContext :
     ApplicationContext
 {
-    private readonly ScxiService _service =
-        new();
+    private readonly ScxiService
+        _service =
+            new();
 
+
+    // =================================================================
+    // SETTINGS
+    // =================================================================
+
+    private readonly ScxiSettings
+        _settings;
+
+
+    // =================================================================
+    // TRAY UI
+    // =================================================================
 
     private readonly NotifyIcon
         _notifyIcon;
@@ -37,14 +50,21 @@ internal sealed class TrayApplicationContext :
         _quitItem;
 
 
+    // =================================================================
+    // TIMERS
+    // =================================================================
+
     private readonly System.Windows.Forms.Timer
         _startupTimer;
 
 
-    // Poll physical-controller connection state.
     private readonly System.Windows.Forms.Timer
         _statusTimer;
 
+
+    // =================================================================
+    // ICONS
+    // =================================================================
 
     private readonly Icon
         _enabledIcon;
@@ -53,6 +73,10 @@ internal sealed class TrayApplicationContext :
     private readonly Icon
         _disabledIcon;
 
+
+    // =================================================================
+    // STATE
+    // =================================================================
 
     private bool _busy =
         false;
@@ -69,7 +93,15 @@ internal sealed class TrayApplicationContext :
     public TrayApplicationContext()
     {
         // =============================================================
-        // ICONS
+        // LOAD SETTINGS
+        // =============================================================
+
+        _settings =
+            ScxiSettings.Load();
+
+
+        // =============================================================
+        // LOAD ICONS
         // =============================================================
 
         _enabledIcon =
@@ -85,7 +117,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // STATUS
+        // STATUS ITEM
         // =============================================================
 
         _statusItem =
@@ -93,12 +125,13 @@ internal sealed class TrayApplicationContext :
                 "Status: Starting..."
             )
             {
-                Enabled = false
+                Enabled =
+                    false
             };
 
 
         // =============================================================
-        // ENABLED
+        // ENABLE / DISABLE ITEM
         // =============================================================
 
         _enabledItem =
@@ -106,9 +139,11 @@ internal sealed class TrayApplicationContext :
                 "Enabled"
             )
             {
-                Checked = false,
+                Checked =
+                    false,
 
-                CheckOnClick = false
+                CheckOnClick =
+                    false
             };
 
 
@@ -117,7 +152,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // REFRESH
+        // REFRESH ITEM
         // =============================================================
 
         _refreshItem =
@@ -131,7 +166,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // QUIT
+        // QUIT ITEM
         // =============================================================
 
         _quitItem =
@@ -145,7 +180,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // MENU
+        // CONTEXT MENU
         // =============================================================
 
         _menu =
@@ -189,24 +224,32 @@ internal sealed class TrayApplicationContext :
         _notifyIcon =
             new NotifyIcon
             {
-                Icon = _disabledIcon,
+                Icon =
+                    _disabledIcon,
 
-                Text = "SCXI - Starting",
+                Text =
+                    "SCXI - Starting",
 
-                ContextMenuStrip = _menu,
+                ContextMenuStrip =
+                    _menu,
 
-                Visible = true
+                Visible =
+                    true
             };
 
 
         // =============================================================
         // STARTUP TIMER
+        //
+        // Wait briefly for the WinForms message loop to start,
+        // then apply the saved Enabled preference.
         // =============================================================
 
         _startupTimer =
             new System.Windows.Forms.Timer
             {
-                Interval = 100
+                Interval =
+                    100
             };
 
 
@@ -220,14 +263,15 @@ internal sealed class TrayApplicationContext :
         // =============================================================
         // CONTROLLER STATUS TIMER
         //
-        // Checks four times per second whether the physical
-        // Steam Controller is currently detected.
+        // Keeps the red/green tray icon synchronized with the
+        // physical Steam Controller.
         // =============================================================
 
         _statusTimer =
             new System.Windows.Forms.Timer
             {
-                Interval = 250
+                Interval =
+                    250
             };
 
 
@@ -255,7 +299,9 @@ internal sealed class TrayApplicationContext :
             );
 
 
-        if (!File.Exists(path))
+        if (!File.Exists(
+                path
+            ))
         {
             return (Icon)
                 SystemIcons.Application.Clone();
@@ -280,7 +326,7 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // INITIAL START
+    // STARTUP
     // =================================================================
 
     private async void StartupTimer_Tick(
@@ -291,9 +337,32 @@ internal sealed class TrayApplicationContext :
         _startupTimer.Stop();
 
 
-        await SetEnabledAsync(
-            true
-        );
+        // =============================================================
+        // REMEMBERED ENABLED STATE
+        // =============================================================
+
+        if (_settings.Enabled)
+        {
+            Console.WriteLine(
+                "[SCXI] Saved state: Enabled."
+            );
+
+
+            await SetEnabledAsync(
+                true,
+                savePreference: false
+            );
+        }
+        else
+        {
+            Console.WriteLine(
+                "[SCXI] Saved state: Disabled."
+            );
+
+
+            // Do NOT start VIIPER or create a virtual controller.
+            UpdateVisualState();
+        }
     }
 
 
@@ -318,7 +387,7 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // ENABLE / DISABLE
+    // ENABLE / DISABLE CLICK
     // =================================================================
 
     private async void EnabledItem_Click(
@@ -338,13 +407,19 @@ internal sealed class TrayApplicationContext :
 
 
         await SetEnabledAsync(
-            enable
+            enable,
+            savePreference: true
         );
     }
 
 
+    // =================================================================
+    // SET ENABLED STATE
+    // =================================================================
+
     private async Task SetEnabledAsync(
-        bool enabled
+        bool enabled,
+        bool savePreference
     )
     {
         if (_busy)
@@ -360,6 +435,10 @@ internal sealed class TrayApplicationContext :
 
         try
         {
+            // =========================================================
+            // ENABLE
+            // =========================================================
+
             if (enabled)
             {
                 _statusItem.Text =
@@ -378,6 +457,11 @@ internal sealed class TrayApplicationContext :
                 await _service
                     .StartAsync();
             }
+
+            // =========================================================
+            // DISABLE
+            // =========================================================
+
             else
             {
                 _statusItem.Text =
@@ -395,6 +479,23 @@ internal sealed class TrayApplicationContext :
 
                 await _service
                     .StopAsync();
+            }
+
+
+            // =========================================================
+            // SAVE USER CHOICE
+            //
+            // Startup does not rewrite the settings file.
+            // Only a manual Enabled toggle changes the preference.
+            // =========================================================
+
+            if (savePreference)
+            {
+                _settings.Enabled =
+                    enabled;
+
+
+                _settings.Save();
             }
 
 
@@ -455,9 +556,9 @@ internal sealed class TrayApplicationContext :
 
     private void UpdateVisualState()
     {
-        // -------------------------------------------------------------
-        // BRIDGE DISABLED
-        // -------------------------------------------------------------
+        // =============================================================
+        // SCXI DISABLED
+        // =============================================================
 
         if (!_service.IsRunning)
         {
@@ -486,9 +587,9 @@ internal sealed class TrayApplicationContext :
         }
 
 
-        // -------------------------------------------------------------
-        // BRIDGE ENABLED BUT NO PHYSICAL CONTROLLER
-        // -------------------------------------------------------------
+        // =============================================================
+        // SCXI ENABLED, CONTROLLER NOT DETECTED
+        // =============================================================
 
         if (!_service.IsControllerDetected)
         {
@@ -517,9 +618,9 @@ internal sealed class TrayApplicationContext :
         }
 
 
-        // -------------------------------------------------------------
-        // PHYSICAL CONTROLLER DETECTED
-        // -------------------------------------------------------------
+        // =============================================================
+        // CONTROLLER CONNECTED
+        // =============================================================
 
         _statusItem.Text =
             "Status: Controller Connected";
@@ -544,7 +645,7 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // REFRESH
+    // REFRESH DEVICES
     // =================================================================
 
     private async void RefreshItem_Click(
@@ -632,7 +733,7 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // ICON STATE
+    // TRAY ICON STATE
     // =================================================================
 
     private void SetTrayIcon(
@@ -726,6 +827,14 @@ internal sealed class TrayApplicationContext :
         catch
         {
         }
+
+
+        // IMPORTANT:
+        //
+        // We intentionally do NOT change _settings.Enabled here.
+        //
+        // Quitting the app is different from disabling SCXI.
+        // The user's last Enabled/Disabled choice should survive.
 
 
         _notifyIcon.Visible =
