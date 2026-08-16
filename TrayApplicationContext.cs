@@ -47,6 +47,10 @@ internal sealed class TrayApplicationContext :
 
 
     private readonly ToolStripMenuItem
+        _startWithWindowsItem;
+
+
+    private readonly ToolStripMenuItem
         _quitItem;
 
 
@@ -117,7 +121,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // STATUS ITEM
+        // STATUS
         // =============================================================
 
         _statusItem =
@@ -131,7 +135,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // ENABLE / DISABLE ITEM
+        // ENABLE / DISABLE
         // =============================================================
 
         _enabledItem =
@@ -152,7 +156,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // REFRESH ITEM
+        // REFRESH
         // =============================================================
 
         _refreshItem =
@@ -166,7 +170,28 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // QUIT ITEM
+        // START WITH WINDOWS
+        // =============================================================
+
+        _startWithWindowsItem =
+            new ToolStripMenuItem(
+                "Start with Windows"
+            )
+            {
+                Checked =
+                    StartupManager.IsEnabled(),
+
+                CheckOnClick =
+                    false
+            };
+
+
+        _startWithWindowsItem.Click +=
+            StartWithWindowsItem_Click;
+
+
+        // =============================================================
+        // QUIT
         // =============================================================
 
         _quitItem =
@@ -213,8 +238,26 @@ internal sealed class TrayApplicationContext :
 
 
         _menu.Items.Add(
+            _startWithWindowsItem
+        );
+
+
+        _menu.Items.Add(
+            new ToolStripSeparator()
+        );
+
+
+        _menu.Items.Add(
             _quitItem
         );
+
+
+        // Re-read the registry whenever the user opens the menu.
+        //
+        // This keeps the checkbox accurate even if the Windows
+        // startup entry is changed outside SCXI.
+        _menu.Opening +=
+            Menu_Opening;
 
 
         // =============================================================
@@ -241,8 +284,8 @@ internal sealed class TrayApplicationContext :
         // =============================================================
         // STARTUP TIMER
         //
-        // Wait briefly for the WinForms message loop to start,
-        // then apply the saved Enabled preference.
+        // Allows the WinForms message loop to begin before applying
+        // the remembered Enabled preference.
         // =============================================================
 
         _startupTimer =
@@ -262,9 +305,6 @@ internal sealed class TrayApplicationContext :
 
         // =============================================================
         // CONTROLLER STATUS TIMER
-        //
-        // Keeps the red/green tray icon synchronized with the
-        // physical Steam Controller.
         // =============================================================
 
         _statusTimer =
@@ -337,10 +377,6 @@ internal sealed class TrayApplicationContext :
         _startupTimer.Stop();
 
 
-        // =============================================================
-        // REMEMBERED ENABLED STATE
-        // =============================================================
-
         if (_settings.Enabled)
         {
             Console.WriteLine(
@@ -360,7 +396,7 @@ internal sealed class TrayApplicationContext :
             );
 
 
-            // Do NOT start VIIPER or create a virtual controller.
+            // Do not start VIIPER.
             UpdateVisualState();
         }
     }
@@ -387,7 +423,23 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // ENABLE / DISABLE CLICK
+    // MENU OPENING
+    // =================================================================
+
+    private void Menu_Opening(
+        object? sender,
+        System.ComponentModel.CancelEventArgs e
+    )
+    {
+        // Windows registry is the source of truth
+        // for the startup setting.
+        _startWithWindowsItem.Checked =
+            StartupManager.IsEnabled();
+    }
+
+
+    // =================================================================
+    // ENABLE / DISABLE
     // =================================================================
 
     private async void EnabledItem_Click(
@@ -412,10 +464,6 @@ internal sealed class TrayApplicationContext :
         );
     }
 
-
-    // =================================================================
-    // SET ENABLED STATE
-    // =================================================================
 
     private async Task SetEnabledAsync(
         bool enabled,
@@ -483,10 +531,7 @@ internal sealed class TrayApplicationContext :
 
 
             // =========================================================
-            // SAVE USER CHOICE
-            //
-            // Startup does not rewrite the settings file.
-            // Only a manual Enabled toggle changes the preference.
+            // SAVE ENABLED PREFERENCE
             // =========================================================
 
             if (savePreference)
@@ -525,20 +570,9 @@ internal sealed class TrayApplicationContext :
             );
 
 
-            _notifyIcon.BalloonTipTitle =
-                "SCXI";
-
-
-            _notifyIcon.BalloonTipText =
-                ex.Message;
-
-
-            _notifyIcon.BalloonTipIcon =
-                ToolTipIcon.Error;
-
-
-            _notifyIcon.ShowBalloonTip(
-                5000
+            ShowError(
+                "SCXI Error",
+                ex.Message
             );
         }
         finally
@@ -551,13 +585,95 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
+    // START WITH WINDOWS
+    // =================================================================
+
+    private void StartWithWindowsItem_Click(
+        object? sender,
+        EventArgs e
+    )
+    {
+        if (_busy ||
+            _quitting)
+        {
+            return;
+        }
+
+
+        bool currentlyEnabled =
+            StartupManager.IsEnabled();
+
+
+        bool success;
+
+
+        if (currentlyEnabled)
+        {
+            success =
+                StartupManager.Disable();
+        }
+        else
+        {
+            success =
+                StartupManager.Enable();
+        }
+
+
+        if (!success)
+        {
+            // Re-read actual state in case Windows rejected
+            // the requested change.
+            _startWithWindowsItem.Checked =
+                StartupManager.IsEnabled();
+
+
+            ShowError(
+                "SCXI",
+                currentlyEnabled
+                    ? "Could not disable Start with Windows."
+                    : "Could not enable Start with Windows."
+            );
+
+
+            return;
+        }
+
+
+        // Confirm actual registry state rather than assuming
+        // the write succeeded exactly as expected.
+        _startWithWindowsItem.Checked =
+            StartupManager.IsEnabled();
+
+
+        if (_startWithWindowsItem.Checked)
+        {
+            _notifyIcon.BalloonTipTitle =
+                "SCXI";
+
+
+            _notifyIcon.BalloonTipText =
+                "SCXI will now start when you sign in to Windows.";
+
+
+            _notifyIcon.BalloonTipIcon =
+                ToolTipIcon.Info;
+
+
+            _notifyIcon.ShowBalloonTip(
+                2500
+            );
+        }
+    }
+
+
+    // =================================================================
     // VISUAL STATE
     // =================================================================
 
     private void UpdateVisualState()
     {
         // =============================================================
-        // SCXI DISABLED
+        // DISABLED
         // =============================================================
 
         if (!_service.IsRunning)
@@ -588,7 +704,7 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // SCXI ENABLED, CONTROLLER NOT DETECTED
+        // WAITING FOR CONTROLLER
         // =============================================================
 
         if (!_service.IsControllerDetected)
@@ -645,7 +761,7 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // REFRESH DEVICES
+    // REFRESH
     // =================================================================
 
     private async void RefreshItem_Click(
@@ -707,20 +823,9 @@ internal sealed class TrayApplicationContext :
             );
 
 
-            _notifyIcon.BalloonTipTitle =
-                "SCXI";
-
-
-            _notifyIcon.BalloonTipText =
-                ex.Message;
-
-
-            _notifyIcon.BalloonTipIcon =
-                ToolTipIcon.Error;
-
-
-            _notifyIcon.ShowBalloonTip(
-                5000
+            ShowError(
+                "SCXI Refresh Error",
+                ex.Message
             );
         }
         finally
@@ -733,7 +838,34 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // TRAY ICON STATE
+    // ERROR BALLOON
+    // =================================================================
+
+    private void ShowError(
+        string title,
+        string message
+    )
+    {
+        _notifyIcon.BalloonTipTitle =
+            title;
+
+
+        _notifyIcon.BalloonTipText =
+            message;
+
+
+        _notifyIcon.BalloonTipIcon =
+            ToolTipIcon.Error;
+
+
+        _notifyIcon.ShowBalloonTip(
+            5000
+        );
+    }
+
+
+    // =================================================================
+    // TRAY ICON
     // =================================================================
 
     private void SetTrayIcon(
@@ -766,6 +898,10 @@ internal sealed class TrayApplicationContext :
         _refreshItem.Enabled =
             !busy &&
             _service.IsRunning;
+
+
+        _startWithWindowsItem.Enabled =
+            !busy;
 
 
         _quitItem.Enabled =
@@ -829,12 +965,10 @@ internal sealed class TrayApplicationContext :
         }
 
 
-        // IMPORTANT:
+        // Quitting does NOT change:
         //
-        // We intentionally do NOT change _settings.Enabled here.
-        //
-        // Quitting the app is different from disabling SCXI.
-        // The user's last Enabled/Disabled choice should survive.
+        // - remembered Enabled/Disabled state
+        // - Start with Windows registry setting
 
 
         _notifyIcon.Visible =
