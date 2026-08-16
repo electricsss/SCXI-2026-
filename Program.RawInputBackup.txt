@@ -1,0 +1,331 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+internal static class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        Console.WriteLine("SteamInputBridge - Live Raw Input Test");
+        Console.WriteLine("======================================");
+        Console.WriteLine();
+        Console.WriteLine("Steam should remain OPEN.");
+        Console.WriteLine("Move sticks and press buttons on the Steam Controller.");
+        Console.WriteLine("Press Ctrl+C when finished.");
+        Console.WriteLine();
+
+        using var listener = new SteamRawInputListener();
+
+        Application.Run(new ApplicationContext());
+    }
+}
+
+internal sealed class SteamRawInputListener : NativeWindow, IDisposable
+{
+    private const int WM_INPUT = 0x00FF;
+
+    private const uint RID_INPUT = 0x10000003;
+    private const uint RIDI_DEVICENAME = 0x20000007;
+
+    private const uint RIM_TYPEHID = 2;
+    private const uint RIDEV_INPUTSINK = 0x00000100;
+
+    private readonly Dictionary<IntPtr, DateTime> _lastPrinted = new();
+    private readonly HashSet<IntPtr> _announcedDevices = new();
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTDEVICE
+    {
+        public ushort usUsagePage;
+        public ushort usUsage;
+        public uint dwFlags;
+        public IntPtr hwndTarget;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTHEADER
+    {
+        public uint dwType;
+        public uint dwSize;
+        public IntPtr hDevice;
+        public IntPtr wParam;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterRawInputDevices(
+        RAWINPUTDEVICE[] pRawInputDevices,
+        uint uiNumDevices,
+        uint cbSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetRawInputData(
+        IntPtr hRawInput,
+        uint uiCommand,
+        IntPtr pData,
+        ref uint pcbSize,
+        uint cbSizeHeader);
+
+    [DllImport(
+        "user32.dll",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    private static extern uint GetRawInputDeviceInfo(
+        IntPtr hDevice,
+        uint uiCommand,
+        IntPtr pData,
+        ref uint pcbSize);
+
+    public SteamRawInputListener()
+    {
+        CreateHandle(new CreateParams
+        {
+            Caption = "SteamInputBridgeRawInput"
+        });
+
+        var devices = new[]
+        {
+            new RAWINPUTDEVICE
+            {
+                usUsagePage = 0xFF00,
+                usUsage = 0x0001,
+                dwFlags = RIDEV_INPUTSINK,
+                hwndTarget = Handle
+            }
+        };
+
+        if (!RegisterRawInputDevices(
+                devices,
+                (uint)devices.Length,
+                (uint)Marshal.SizeOf<RAWINPUTDEVICE>()))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        Console.WriteLine("Registered for FF00/0001 Raw Input.");
+        Console.WriteLine("Waiting for Steam Controller packets...");
+        Console.WriteLine();
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_INPUT)
+        {
+            ProcessRawInput(m.LParam);
+        }
+
+        base.WndProc(ref m);
+    }
+
+    private void ProcessRawInput(IntPtr rawInputHandle)
+    {
+        uint headerSize = (uint)Marshal.SizeOf<RAWINPUTHEADER>();
+        uint totalSize = 0;
+
+        uint result = GetRawInputData(
+            rawInputHandle,
+            RID_INPUT,
+            IntPtr.Zero,
+            ref totalSize,
+            headerSize);
+
+        if (result == uint.MaxValue || totalSize == 0)
+            return;
+
+        IntPtr buffer = Marshal.AllocHGlobal((int)totalSize);
+
+        try
+        {
+            result = GetRawInputData(
+                rawInputHandle,
+                RID_INPUT,
+                buffer,
+                ref totalSize,
+                headerSize);
+
+            if (result == uint.MaxValue)
+                return;
+
+            var header =
+                Marshal.PtrToStructure<RAWINPUTHEADER>(buffer);
+
+            if (header.dwType != RIM_TYPEHID)
+                return;
+
+            string path = GetDeviceName(header.hDevice);
+
+            if (!path.Contains(
+                    "VID_28DE&PID_1304",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int hidOffset = Marshal.SizeOf<RAWINPUTHEADER>();
+
+            if (totalSize < hidOffset + 8)
+                return;
+
+            uint reportSize =
+                (uint)Marshal.ReadInt32(buffer, hidOffset);
+
+            uint reportCount =
+                (uint)Marshal.ReadInt32(buffer, hidOffset + 4);
+
+            int dataOffset = hidOffset + 8;
+
+            if (reportSize == 0 || reportCount == 0)
+                return;
+
+            for (uint i = 0; i < reportCount; i++)
+            {
+                int offset =
+                    dataOffset + (int)(i * reportSize);
+
+                if (offset + reportSize > totalSize)
+                    break;
+
+                byte[] report = new byte[reportSize];
+
+                Marshal.Copy(
+                    IntPtr.Add(buffer, offset),
+                    report,
+                    0,
+                    (int)reportSize);
+
+                HandleReport(header.hDevice, path, report);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private void HandleReport(
+        IntPtr device,
+        string path,
+        byte[] report)
+    {
+        if (report.Length == 0)
+            return;
+
+        // 0x42 = USB/dongle state report
+        // 0x45 = alternate/BLE state report
+        if (report[0] != 0x42 && report[0] != 0x45)
+            return;
+
+        if (_announcedDevices.Add(device))
+        {
+            Console.WriteLine("LIVE CONTROLLER SLOT FOUND!");
+            Console.WriteLine(path);
+            Console.WriteLine();
+        }
+
+        // Limit console spam.
+        DateTime now = DateTime.UtcNow;
+
+        if (_lastPrinted.TryGetValue(device, out DateTime last) &&
+            (now - last).TotalMilliseconds < 250)
+        {
+            return;
+        }
+
+        _lastPrinted[device] = now;
+
+        if (report.Length < 18)
+        {
+            Console.WriteLine(
+                $"State report 0x{report[0]:X2}, length {report.Length}");
+
+            return;
+        }
+
+        byte buttons0 = report[2];
+        byte buttons1 = report[3];
+        byte buttons2 = report[4];
+        byte flags = report[5];
+
+        short leftTrigger =
+            BitConverter.ToInt16(report, 6);
+
+        short rightTrigger =
+            BitConverter.ToInt16(report, 8);
+
+        short leftX =
+            BitConverter.ToInt16(report, 10);
+
+        short leftY =
+            BitConverter.ToInt16(report, 12);
+
+        short rightX =
+            BitConverter.ToInt16(report, 14);
+
+        short rightY =
+            BitConverter.ToInt16(report, 16);
+
+        string slot = GetInterfaceName(path);
+
+        Console.WriteLine(
+            $"{slot,-5} " +
+            $"ID={report[0]:X2} " +
+            $"BTN={buttons0:X2}-{buttons1:X2}-{buttons2:X2}-{flags:X2} " +
+            $"LT={leftTrigger,5} RT={rightTrigger,5} " +
+            $"LS=({leftX,6},{leftY,6}) " +
+            $"RS=({rightX,6},{rightY,6})");
+    }
+
+    private static string GetInterfaceName(string path)
+    {
+        int index =
+            path.IndexOf("MI_", StringComparison.OrdinalIgnoreCase);
+
+        if (index >= 0 && index + 5 <= path.Length)
+            return path.Substring(index, 5);
+
+        return "HID";
+    }
+
+    private static string GetDeviceName(IntPtr device)
+    {
+        uint size = 0;
+
+        GetRawInputDeviceInfo(
+            device,
+            RIDI_DEVICENAME,
+            IntPtr.Zero,
+            ref size);
+
+        if (size == 0)
+            return "";
+
+        IntPtr buffer =
+            Marshal.AllocHGlobal((int)((size + 1) * 2));
+
+        try
+        {
+            uint result =
+                GetRawInputDeviceInfo(
+                    device,
+                    RIDI_DEVICENAME,
+                    buffer,
+                    ref size);
+
+            if (result == uint.MaxValue)
+                return "";
+
+            return Marshal.PtrToStringUni(buffer) ?? "";
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public void Dispose()
+    {
+        DestroyHandle();
+    }
+}

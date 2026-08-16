@@ -1,0 +1,501 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Threading.Channels;
+using System.Windows.Forms;
+
+using Viiper.Client;
+using Viiper.Client.Types;
+using Viiper.Client.Devices.Xbox360;
+
+using XboxButton = Viiper.Client.Devices.Xbox360.Button;
+
+internal static class Program
+{
+    [STAThread]
+    static async Task Main()
+    {
+        Console.WriteLine("SteamInputBridge - LIVE A Button Test");
+        Console.WriteLine("=====================================");
+        Console.WriteLine();
+
+        var client = new ViiperClient("localhost", 3242);
+
+        // ---------------------------------------------------------
+        // Find or create VIIPER bus
+        // ---------------------------------------------------------
+
+        var buses = await client.BusListAsync();
+
+        uint busId;
+
+        if (buses.Buses.Length == 0)
+        {
+            var bus = await client.BusCreateAsync(null);
+            busId = bus.BusID;
+
+            Console.WriteLine($"Created VIIPER bus {busId}");
+        }
+        else
+        {
+            busId = buses.Buses[0];
+
+            Console.WriteLine($"Using VIIPER bus {busId}");
+        }
+
+        // ---------------------------------------------------------
+        // Create Xbox 360 controller
+        // ---------------------------------------------------------
+
+        var request = new DeviceCreateRequest
+        {
+            Type = "xbox360"
+        };
+
+        var response =
+            await client.BusDeviceAddAsync(busId, request);
+
+        Console.WriteLine(
+            $"Created virtual Xbox controller: {response.BusID}-{response.DevID}");
+
+        await using var xbox =
+            await client.ConnectDeviceAsync(
+                busId,
+                response.DevID);
+
+        Console.WriteLine("Connected to virtual Xbox controller.");
+        Console.WriteLine();
+
+        // ---------------------------------------------------------
+        // Start Raw Input listener
+        // ---------------------------------------------------------
+
+        using var listener =
+            new SteamRawInputListener(xbox);
+
+        Console.WriteLine("Steam Controller listener active.");
+        Console.WriteLine();
+        Console.WriteLine("Press A on the Steam Controller.");
+        Console.WriteLine("Watch Button 1 in joy.cpl.");
+        Console.WriteLine();
+        Console.WriteLine("Press Ctrl+C to stop.");
+        Console.WriteLine();
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Application.Exit();
+        };
+
+        try
+        {
+            Application.Run(new ApplicationContext());
+        }
+        finally
+        {
+            // Release everything before shutting down.
+            try
+            {
+                await xbox.SendAsync(new Xbox360Input
+                {
+                    Buttons = 0,
+                    Lt = 0,
+                    Rt = 0,
+                    Lx = 0,
+                    Ly = 0,
+                    Rx = 0,
+                    Ry = 0
+                });
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await client.BusDeviceRemoveAsync(
+                    busId,
+                    response.DevID);
+            }
+            catch
+            {
+            }
+
+            Console.WriteLine("Virtual controller removed.");
+        }
+    }
+}
+
+
+// =====================================================================
+// Steam Controller Raw Input listener
+// =====================================================================
+
+internal sealed class SteamRawInputListener :
+    NativeWindow,
+    IDisposable
+{
+    private const int WM_INPUT = 0x00FF;
+
+    private const uint RID_INPUT = 0x10000003;
+    private const uint RIDI_DEVICENAME = 0x20000007;
+
+    private const uint RIM_TYPEHID = 2;
+    private const uint RIDEV_INPUTSINK = 0x00000100;
+
+    private readonly ViiperDevice _xbox;
+
+    private bool? _lastAState;
+
+    private readonly Channel<bool> _aStateChannel =
+        Channel.CreateUnbounded<bool>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true
+            });
+
+    private readonly Task _senderTask;
+
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTDEVICE
+    {
+        public ushort usUsagePage;
+        public ushort usUsage;
+        public uint dwFlags;
+        public IntPtr hwndTarget;
+    }
+
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RAWINPUTHEADER
+    {
+        public uint dwType;
+        public uint dwSize;
+        public IntPtr hDevice;
+        public IntPtr wParam;
+    }
+
+
+    [DllImport(
+        "user32.dll",
+        SetLastError = true)]
+    private static extern bool RegisterRawInputDevices(
+        RAWINPUTDEVICE[] pRawInputDevices,
+        uint uiNumDevices,
+        uint cbSize);
+
+
+    [DllImport(
+        "user32.dll",
+        SetLastError = true)]
+    private static extern uint GetRawInputData(
+        IntPtr hRawInput,
+        uint uiCommand,
+        IntPtr pData,
+        ref uint pcbSize,
+        uint cbSizeHeader);
+
+
+    [DllImport(
+        "user32.dll",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    private static extern uint GetRawInputDeviceInfo(
+        IntPtr hDevice,
+        uint uiCommand,
+        IntPtr pData,
+        ref uint pcbSize);
+
+
+    public SteamRawInputListener(
+        ViiperDevice xbox)
+    {
+        _xbox = xbox;
+
+        CreateHandle(new CreateParams
+        {
+            Caption = "SteamInputBridgeRawInput"
+        });
+
+        var devices = new[]
+        {
+            new RAWINPUTDEVICE
+            {
+                usUsagePage = 0xFF00,
+                usUsage = 0x0001,
+                dwFlags = RIDEV_INPUTSINK,
+                hwndTarget = Handle
+            }
+        };
+
+        if (!RegisterRawInputDevices(
+                devices,
+                (uint)devices.Length,
+                (uint)Marshal.SizeOf<RAWINPUTDEVICE>()))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error());
+        }
+
+        _senderTask =
+            Task.Run(SenderLoopAsync);
+    }
+
+
+    protected override void WndProc(
+        ref Message m)
+    {
+        if (m.Msg == WM_INPUT)
+        {
+            ProcessRawInput(m.LParam);
+        }
+
+        base.WndProc(ref m);
+    }
+
+
+    private void ProcessRawInput(
+        IntPtr rawInputHandle)
+    {
+        uint headerSize =
+            (uint)Marshal.SizeOf<RAWINPUTHEADER>();
+
+        uint totalSize = 0;
+
+        uint result =
+            GetRawInputData(
+                rawInputHandle,
+                RID_INPUT,
+                IntPtr.Zero,
+                ref totalSize,
+                headerSize);
+
+        if (result == uint.MaxValue ||
+            totalSize == 0)
+        {
+            return;
+        }
+
+        IntPtr buffer =
+            Marshal.AllocHGlobal((int)totalSize);
+
+        try
+        {
+            result =
+                GetRawInputData(
+                    rawInputHandle,
+                    RID_INPUT,
+                    buffer,
+                    ref totalSize,
+                    headerSize);
+
+            if (result == uint.MaxValue)
+                return;
+
+            var header =
+                Marshal.PtrToStructure<RAWINPUTHEADER>(
+                    buffer);
+
+            if (header.dwType != RIM_TYPEHID)
+                return;
+
+            string path =
+                GetDeviceName(header.hDevice);
+
+            if (!path.Contains(
+                    "VID_28DE&PID_1304",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int hidOffset =
+                Marshal.SizeOf<RAWINPUTHEADER>();
+
+            if (totalSize < hidOffset + 8)
+                return;
+
+            uint reportSize =
+                (uint)Marshal.ReadInt32(
+                    buffer,
+                    hidOffset);
+
+            uint reportCount =
+                (uint)Marshal.ReadInt32(
+                    buffer,
+                    hidOffset + 4);
+
+            int dataOffset =
+                hidOffset + 8;
+
+            if (reportSize == 0 ||
+                reportCount == 0)
+            {
+                return;
+            }
+
+            for (uint i = 0;
+                 i < reportCount;
+                 i++)
+            {
+                int offset =
+                    dataOffset +
+                    (int)(i * reportSize);
+
+                if (offset + reportSize >
+                    totalSize)
+                {
+                    break;
+                }
+
+                byte[] report =
+                    new byte[reportSize];
+
+                Marshal.Copy(
+                    IntPtr.Add(
+                        buffer,
+                        offset),
+                    report,
+                    0,
+                    (int)reportSize);
+
+                HandleSteamReport(report);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+
+    private void HandleSteamReport(
+        byte[] report)
+    {
+        if (report.Length < 3)
+            return;
+
+        // 0x42 = USB/dongle state
+        // 0x45 = alternate/BLE state
+        if (report[0] != 0x42 &&
+            report[0] != 0x45)
+        {
+            return;
+        }
+
+        // Steam Controller:
+        // byte 2, bit 0 = A
+        bool aPressed =
+            (report[2] & 0x01) != 0;
+
+        if (_lastAState == aPressed)
+            return;
+
+        _lastAState = aPressed;
+
+        _aStateChannel.Writer.TryWrite(
+            aPressed);
+
+        Console.WriteLine(
+            aPressed
+                ? "Physical A DOWN  -> Xbox A DOWN"
+                : "Physical A UP    -> Xbox A UP");
+    }
+
+
+    private async Task SenderLoopAsync()
+    {
+        await foreach (
+            bool pressed in
+            _aStateChannel.Reader.ReadAllAsync())
+        {
+            try
+            {
+                await _xbox.SendAsync(
+                    new Xbox360Input
+                    {
+                        Buttons =
+                            pressed
+                                ? (uint)XboxButton.A
+                                : 0,
+
+                        Lt = 0,
+                        Rt = 0,
+
+                        Lx = 0,
+                        Ly = 0,
+
+                        Rx = 0,
+                        Ry = 0
+                    });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Xbox send error: {ex.Message}");
+            }
+        }
+    }
+
+
+    private static string GetDeviceName(
+        IntPtr device)
+    {
+        uint size = 0;
+
+        GetRawInputDeviceInfo(
+            device,
+            RIDI_DEVICENAME,
+            IntPtr.Zero,
+            ref size);
+
+        if (size == 0)
+            return "";
+
+        IntPtr buffer =
+            Marshal.AllocHGlobal(
+                (int)((size + 1) * 2));
+
+        try
+        {
+            uint result =
+                GetRawInputDeviceInfo(
+                    device,
+                    RIDI_DEVICENAME,
+                    buffer,
+                    ref size);
+
+            if (result == uint.MaxValue)
+                return "";
+
+            return
+                Marshal.PtrToStringUni(buffer)
+                ?? "";
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+
+    public void Dispose()
+    {
+        _aStateChannel.Writer.TryComplete();
+
+        try
+        {
+            _senderTask
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch
+        {
+        }
+
+        DestroyHandle();
+    }
+}
