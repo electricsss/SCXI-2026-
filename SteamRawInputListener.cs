@@ -6,7 +6,8 @@ using System.Windows.Forms;
 using Viiper.Client;
 using Viiper.Client.Devices.Xbox360;
 
-using XboxButton = Viiper.Client.Devices.Xbox360.Button;
+using XboxButton =
+    Viiper.Client.Devices.Xbox360.Button;
 
 
 // =====================================================================
@@ -17,29 +18,63 @@ internal sealed class SteamRawInputListener :
     NativeWindow,
     IDisposable
 {
-    private const int WM_INPUT = 0x00FF;
-
-    private const uint RID_INPUT = 0x10000003;
-    private const uint RIDI_DEVICENAME = 0x20000007;
-
-    private const uint RIM_TYPEHID = 2;
-    private const uint RIDEV_INPUTSINK = 0x00000100;
-
-    private const long DisconnectTimeoutMs = 1000;
+    private const int WM_INPUT =
+        0x00FF;
 
 
-    private readonly ViiperDevice _xbox;
+    private const uint RID_INPUT =
+        0x10000003;
+
+
+    private const uint RIDI_DEVICENAME =
+        0x20000007;
+
+
+    private const uint RIM_TYPEHID =
+        2;
+
+
+    private const uint RIDEV_INPUTSINK =
+        0x00000100;
+
+
+    private const long DisconnectTimeoutMs =
+        1000;
+
+
+    private readonly ViiperDevice
+        _xbox;
+
+
+    // =================================================================
+    // CONTROLLER EVENTS
+    // =================================================================
+
+    public event Action<string>?
+        ControllerConnected;
+
+
+    public event Action?
+        ControllerDisconnected;
 
 
     // =================================================================
     // CONNECTION STATE
     // =================================================================
 
-    private long _lastPacketTick = 0;
+    private long _lastPacketTick =
+        0;
+
 
     // 0 = disconnected
     // 1 = connected
-    private int _controllerConnected = 0;
+    private int _controllerConnected =
+        0;
+
+
+    private string?
+        _currentDevicePath;
+
 
     private readonly System.Threading.Timer
         _disconnectTimer;
@@ -51,14 +86,24 @@ internal sealed class SteamRawInputListener :
         ) == 1;
 
 
+    public string? CurrentDevicePath =>
+        System.Threading.Volatile.Read(
+            ref _currentDevicePath
+        );
+
+
     // =================================================================
     // LAST CONTROLLER STATE
     // =================================================================
 
-    private readonly object _stateLock =
-        new();
+    private readonly object
+        _stateLock =
+            new();
 
-    private SteamGamepadState _lastState;
+
+    private SteamGamepadState
+        _lastState;
+
 
     private bool _hasLastState =
         false;
@@ -71,10 +116,15 @@ internal sealed class SteamRawInputListener :
     private readonly Channel<Xbox360Input>
         _stateChannel =
             Channel.CreateBounded<Xbox360Input>(
-                new BoundedChannelOptions(1)
+                new BoundedChannelOptions(
+                    1
+                )
                 {
-                    SingleReader = true,
-                    SingleWriter = false,
+                    SingleReader =
+                        true,
+
+                    SingleWriter =
+                        false,
 
                     FullMode =
                         BoundedChannelFullMode.DropOldest
@@ -82,7 +132,8 @@ internal sealed class SteamRawInputListener :
             );
 
 
-    private readonly Task _senderTask;
+    private readonly Task
+        _senderTask;
 
 
     // =================================================================
@@ -107,7 +158,9 @@ internal sealed class SteamRawInputListener :
     // RAW INPUT STRUCTURES
     // =================================================================
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(
+        LayoutKind.Sequential
+    )]
     private struct RAWINPUTDEVICE
     {
         public ushort usUsagePage;
@@ -120,7 +173,9 @@ internal sealed class SteamRawInputListener :
     }
 
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(
+        LayoutKind.Sequential
+    )]
     private struct RAWINPUTHEADER
     {
         public uint dwType;
@@ -182,13 +237,15 @@ internal sealed class SteamRawInputListener :
         ViiperDevice xbox
     )
     {
-        _xbox = xbox;
+        _xbox =
+            xbox;
 
 
         CreateHandle(
             new CreateParams
             {
-                Caption = "SCXI_RawInput"
+                Caption =
+                    "SCXI_RawInput"
             }
         );
 
@@ -199,12 +256,17 @@ internal sealed class SteamRawInputListener :
             {
                 new RAWINPUTDEVICE
                 {
-                    usUsagePage = 0xFF00,
-                    usUsage = 0x0001,
+                    usUsagePage =
+                        0xFF00,
 
-                    dwFlags = RIDEV_INPUTSINK,
+                    usUsage =
+                        0x0001,
 
-                    hwndTarget = Handle
+                    dwFlags =
+                        RIDEV_INPUTSINK,
+
+                    hwndTarget =
+                        Handle
                 }
             };
 
@@ -227,8 +289,7 @@ internal sealed class SteamRawInputListener :
             );
 
 
-        // Check for controller disappearance
-        // four times per second.
+        // Check four times per second for controller disappearance.
         _disconnectTimer =
             new System.Threading.Timer(
                 CheckForDisconnect,
@@ -236,6 +297,11 @@ internal sealed class SteamRawInputListener :
                 250,
                 250
             );
+
+
+        Console.WriteLine(
+            "Waiting for Steam Controller..."
+        );
     }
 
 
@@ -247,7 +313,8 @@ internal sealed class SteamRawInputListener :
         ref Message m
     )
     {
-        if (m.Msg == WM_INPUT)
+        if (m.Msg ==
+            WM_INPUT)
         {
             ProcessRawInput(
                 m.LParam
@@ -273,7 +340,8 @@ internal sealed class SteamRawInputListener :
             (uint)Marshal.SizeOf<RAWINPUTHEADER>();
 
 
-        uint totalSize = 0;
+        uint totalSize =
+            0;
 
 
         uint result =
@@ -286,8 +354,10 @@ internal sealed class SteamRawInputListener :
             );
 
 
-        if (result == uint.MaxValue ||
-            totalSize == 0)
+        if (result ==
+                uint.MaxValue ||
+            totalSize ==
+                0)
         {
             return;
         }
@@ -311,7 +381,8 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            if (result == uint.MaxValue)
+            if (result ==
+                uint.MaxValue)
             {
                 return;
             }
@@ -323,20 +394,24 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            if (header.dwType != RIM_TYPEHID)
+            if (header.dwType !=
+                RIM_TYPEHID)
             {
                 return;
             }
 
 
-            string path =
+            string devicePath =
                 GetDeviceName(
                     header.hDevice
                 );
 
 
-            // 2026 Steam Controller wireless puck.
-            if (!path.Contains(
+            // ---------------------------------------------------------
+            // 2026 Steam Controller wireless puck
+            // ---------------------------------------------------------
+
+            if (!devicePath.Contains(
                     "VID_28DE&PID_1304",
                     StringComparison.OrdinalIgnoreCase
                 ))
@@ -374,8 +449,10 @@ internal sealed class SteamRawInputListener :
                 hidOffset + 8;
 
 
-            if (reportSize == 0 ||
-                reportCount == 0)
+            if (reportSize ==
+                    0 ||
+                reportCount ==
+                    0)
             {
                 return;
             }
@@ -389,10 +466,14 @@ internal sealed class SteamRawInputListener :
             {
                 int offset =
                     dataOffset +
-                    (int)(i * reportSize);
+                    (int)(
+                        i *
+                        reportSize
+                    );
 
 
-                if (offset + reportSize >
+                if (offset +
+                        reportSize >
                     totalSize)
                 {
                     break;
@@ -400,7 +481,9 @@ internal sealed class SteamRawInputListener :
 
 
                 byte[] report =
-                    new byte[reportSize];
+                    new byte[
+                        reportSize
+                    ];
 
 
                 Marshal.Copy(
@@ -415,7 +498,8 @@ internal sealed class SteamRawInputListener :
 
 
                 HandleSteamReport(
-                    report
+                    report,
+                    devicePath
                 );
             }
         }
@@ -433,42 +517,56 @@ internal sealed class SteamRawInputListener :
     // =================================================================
 
     private void HandleSteamReport(
-        byte[] report
+        byte[] report,
+        string devicePath
     )
     {
-        if (report.Length < 18)
+        if (report.Length <
+            18)
         {
             return;
         }
 
 
-        // Valid controller-state reports.
-        if (report[0] != 0x42 &&
-            report[0] != 0x45)
+        // Valid 2026 Steam Controller
+        // state reports.
+        if (report[0] !=
+                0x42 &&
+            report[0] !=
+                0x45)
         {
             return;
         }
 
 
-        MarkControllerAlive();
+        MarkControllerAlive(
+            devicePath
+        );
 
 
         // =============================================================
         // BUTTONS
         // =============================================================
 
-        uint buttons = 0;
+        uint buttons =
+            0;
 
 
-        byte b0 = report[2];
+        byte b0 =
+            report[2];
 
-        byte b1 = report[3];
 
-        byte b2 = report[4];
+        byte b1 =
+            report[3];
+
+
+        byte b2 =
+            report[4];
 
 
         // A
-        if ((b0 & 0x01) != 0)
+        if ((b0 &
+            0x01) != 0)
         {
             buttons |=
                 (uint)XboxButton.A;
@@ -476,7 +574,8 @@ internal sealed class SteamRawInputListener :
 
 
         // B
-        if ((b0 & 0x02) != 0)
+        if ((b0 &
+            0x02) != 0)
         {
             buttons |=
                 (uint)XboxButton.B;
@@ -484,7 +583,8 @@ internal sealed class SteamRawInputListener :
 
 
         // X
-        if ((b0 & 0x04) != 0)
+        if ((b0 &
+            0x04) != 0)
         {
             buttons |=
                 (uint)XboxButton.X;
@@ -492,7 +592,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Y
-        if ((b0 & 0x08) != 0)
+        if ((b0 &
+            0x08) != 0)
         {
             buttons |=
                 (uint)XboxButton.Y;
@@ -500,7 +601,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Right stick click
-        if ((b0 & 0x20) != 0)
+        if ((b0 &
+            0x20) != 0)
         {
             buttons |=
                 (uint)XboxButton.RThumb;
@@ -508,7 +610,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Menu -> Start
-        if ((b0 & 0x40) != 0)
+        if ((b0 &
+            0x40) != 0)
         {
             buttons |=
                 (uint)XboxButton.Start;
@@ -516,7 +619,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Right bumper
-        if ((b1 & 0x02) != 0)
+        if ((b1 &
+            0x02) != 0)
         {
             buttons |=
                 (uint)XboxButton.RShoulder;
@@ -524,7 +628,8 @@ internal sealed class SteamRawInputListener :
 
 
         // D-pad Down
-        if ((b1 & 0x04) != 0)
+        if ((b1 &
+            0x04) != 0)
         {
             buttons |=
                 (uint)XboxButton.DPadDown;
@@ -532,7 +637,8 @@ internal sealed class SteamRawInputListener :
 
 
         // D-pad Right
-        if ((b1 & 0x08) != 0)
+        if ((b1 &
+            0x08) != 0)
         {
             buttons |=
                 (uint)XboxButton.DPadRight;
@@ -540,7 +646,8 @@ internal sealed class SteamRawInputListener :
 
 
         // D-pad Left
-        if ((b1 & 0x10) != 0)
+        if ((b1 &
+            0x10) != 0)
         {
             buttons |=
                 (uint)XboxButton.DPadLeft;
@@ -548,7 +655,8 @@ internal sealed class SteamRawInputListener :
 
 
         // D-pad Up
-        if ((b1 & 0x20) != 0)
+        if ((b1 &
+            0x20) != 0)
         {
             buttons |=
                 (uint)XboxButton.DPadUp;
@@ -556,7 +664,8 @@ internal sealed class SteamRawInputListener :
 
 
         // View -> Back
-        if ((b1 & 0x40) != 0)
+        if ((b1 &
+            0x40) != 0)
         {
             buttons |=
                 (uint)XboxButton.Back;
@@ -564,7 +673,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Left stick click
-        if ((b1 & 0x80) != 0)
+        if ((b1 &
+            0x80) != 0)
         {
             buttons |=
                 (uint)XboxButton.LThumb;
@@ -572,7 +682,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Steam -> Guide
-        if ((b2 & 0x01) != 0)
+        if ((b2 &
+            0x01) != 0)
         {
             buttons |=
                 (uint)XboxButton.Guide;
@@ -580,7 +691,8 @@ internal sealed class SteamRawInputListener :
 
 
         // Left bumper
-        if ((b2 & 0x08) != 0)
+        if ((b2 &
+            0x08) != 0)
         {
             buttons |=
                 (uint)XboxButton.LShoulder;
@@ -672,14 +784,18 @@ internal sealed class SteamRawInputListener :
         {
             shouldSend =
                 !_hasLastState ||
-                _lastState != state;
+                _lastState !=
+                    state;
 
 
             if (shouldSend)
             {
-                _lastState = state;
+                _lastState =
+                    state;
 
-                _hasLastState = true;
+
+                _hasLastState =
+                    true;
             }
         }
 
@@ -702,7 +818,9 @@ internal sealed class SteamRawInputListener :
     // CONTROLLER CONNECTION TRACKING
     // =================================================================
 
-    private void MarkControllerAlive()
+    private void MarkControllerAlive(
+        string devicePath
+    )
     {
         System.Threading.Volatile.Write(
             ref _lastPacketTick,
@@ -710,27 +828,74 @@ internal sealed class SteamRawInputListener :
         );
 
 
+        // Always remember the path belonging
+        // to the interface producing the valid
+        // state reports.
+        System.Threading.Volatile.Write(
+            ref _currentDevicePath,
+            devicePath
+        );
+
+
         if (
             System.Threading.Interlocked.Exchange(
                 ref _controllerConnected,
                 1
-            ) == 0
+            ) != 0
         )
         {
-            lock (_stateLock)
-            {
-                // Force first state after reconnect
-                // to be sent to the virtual controller.
-                _hasLastState = false;
-            }
+            return;
+        }
 
 
+        lock (_stateLock)
+        {
+            // Force the first state after
+            // reconnect to be sent.
+            _hasLastState =
+                false;
+        }
+
+
+        Console.WriteLine(
+            "[SCXI] Steam Controller connected."
+        );
+
+
+        Console.WriteLine(
+            "[SCXI] Active HID path:"
+        );
+
+
+        Console.WriteLine(
+            $"       {devicePath}"
+        );
+
+
+        // =============================================================
+        // NOTIFY OTHER SCXI COMPONENTS
+        // =============================================================
+
+        try
+        {
+            ControllerConnected?.Invoke(
+                devicePath
+            );
+        }
+        catch (Exception ex)
+        {
             Console.WriteLine(
-                "[SCXI] Steam Controller detected."
+                "[SCXI] Controller-connected " +
+                "event error: " +
+                ex.Message
             );
         }
     }
 
+
+    // =================================================================
+    // DISCONNECT CHECK
+    // =================================================================
 
     private void CheckForDisconnect(
         object? state
@@ -752,7 +917,8 @@ internal sealed class SteamRawInputListener :
             );
 
 
-        if (lastPacket == 0)
+        if (lastPacket ==
+            0)
         {
             return;
         }
@@ -781,9 +947,16 @@ internal sealed class SteamRawInputListener :
         }
 
 
+        System.Threading.Volatile.Write(
+            ref _currentDevicePath,
+            null
+        );
+
+
         lock (_stateLock)
         {
-            _hasLastState = false;
+            _hasLastState =
+                false;
         }
 
 
@@ -801,6 +974,24 @@ internal sealed class SteamRawInputListener :
         Console.WriteLine(
             "[SCXI] Virtual Xbox state reset."
         );
+
+
+        // =============================================================
+        // NOTIFY OTHER SCXI COMPONENTS
+        // =============================================================
+
+        try
+        {
+            ControllerDisconnected?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                "[SCXI] Controller-disconnected " +
+                "event error: " +
+                ex.Message
+            );
+        }
     }
 
 
@@ -821,7 +1012,8 @@ internal sealed class SteamRawInputListener :
 
 
         return (byte)Math.Clamp(
-            (value * 255) / 32767,
+            (value * 255) /
+            32767,
             0,
             255
         );
@@ -839,16 +1031,29 @@ internal sealed class SteamRawInputListener :
     {
         return new Xbox360Input
         {
-            Buttons = state.Buttons,
+            Buttons =
+                state.Buttons,
 
-            Lt = state.Lt,
-            Rt = state.Rt,
+            Lt =
+                state.Lt,
 
-            Lx = state.Lx,
-            Ly = state.Ly,
+            Rt =
+                state.Rt,
 
-            Rx = state.Rx,
-            Ry = state.Ry
+            Lx =
+                state.Lx,
+
+            Ly =
+                state.Ly,
+
+            Rx =
+                state.Rx,
+
+            Ry =
+                state.Ry,
+
+            Reserved =
+                new byte[6]
         };
     }
 
@@ -858,16 +1063,29 @@ internal sealed class SteamRawInputListener :
     {
         return new Xbox360Input
         {
-            Buttons = 0,
+            Buttons =
+                0,
 
-            Lt = 0,
-            Rt = 0,
+            Lt =
+                0,
 
-            Lx = 0,
-            Ly = 0,
+            Rt =
+                0,
 
-            Rx = 0,
-            Ry = 0
+            Lx =
+                0,
+
+            Ly =
+                0,
+
+            Rx =
+                0,
+
+            Ry =
+                0,
+
+            Reserved =
+                new byte[6]
         };
     }
 
@@ -892,8 +1110,8 @@ internal sealed class SteamRawInputListener :
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[SCXI] Xbox output error: " +
-                    $"{ex.Message}"
+                    "[SCXI] Xbox output error: " +
+                    ex.Message
                 );
             }
         }
@@ -908,7 +1126,8 @@ internal sealed class SteamRawInputListener :
         IntPtr device
     )
     {
-        uint size = 0;
+        uint size =
+            0;
 
 
         GetRawInputDeviceInfo(
@@ -919,7 +1138,8 @@ internal sealed class SteamRawInputListener :
         );
 
 
-        if (size == 0)
+        if (size ==
+            0)
         {
             return "";
         }
@@ -927,7 +1147,10 @@ internal sealed class SteamRawInputListener :
 
         IntPtr buffer =
             Marshal.AllocHGlobal(
-                (int)((size + 1) * 2)
+                (int)(
+                    (size + 1) *
+                    2
+                )
             );
 
 
@@ -942,7 +1165,8 @@ internal sealed class SteamRawInputListener :
                 );
 
 
-            if (result == uint.MaxValue)
+            if (result ==
+                uint.MaxValue)
             {
                 return "";
             }
@@ -970,6 +1194,18 @@ internal sealed class SteamRawInputListener :
     public void Dispose()
     {
         _disconnectTimer.Dispose();
+
+
+        System.Threading.Interlocked.Exchange(
+            ref _controllerConnected,
+            0
+        );
+
+
+        System.Threading.Volatile.Write(
+            ref _currentDevicePath,
+            null
+        );
 
 
         _stateChannel.Writer.TryComplete();

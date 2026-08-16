@@ -1,8 +1,39 @@
+// =====================================================================
+// SCXI SERVICE
+//
+// Owns the complete SCXI runtime:
+//
+// Physical Steam Controller
+//          ↓
+//      Raw Input
+//          ↓
+//        SCXI
+//          ↓
+// Virtual Xbox 360 Controller
+//          ↓
+//        VIIPER
+//          ↓
+//        XInput
+//
+// Feedback travels the opposite direction:
+//
+// Game / XInput
+//      ↓
+// VIIPER
+//      ↓
+// VirtualXboxController
+//      ↓
+// SteamControllerHaptics
+//      ↓
+// Physical Steam Controller
+// =====================================================================
+
 internal sealed class ScxiService :
     IAsyncDisposable
 {
-    private readonly SemaphoreSlim _operationLock =
-        new(1, 1);
+    private readonly SemaphoreSlim
+        _operationLock =
+            new(1, 1);
 
 
     private ViiperProcessManager?
@@ -15,6 +46,16 @@ internal sealed class ScxiService :
 
     private SteamRawInputListener?
         _listener;
+
+
+    private SteamControllerHaptics?
+        _haptics;
+
+
+    // 0 = haptics not ready
+    // 1 = haptics connected and ready for game rumble
+    private int _hapticsReady =
+        0;
 
 
     public bool IsRunning
@@ -67,30 +108,43 @@ internal sealed class ScxiService :
                 null;
 
 
+            SteamControllerHaptics? haptics =
+                null;
+
+
             try
             {
-                // -----------------------------------------------------
+                // =====================================================
                 // VIIPER
-                // -----------------------------------------------------
+                // =====================================================
 
                 await viiperManager
                     .EnsureRunningAsync();
 
 
-                // -----------------------------------------------------
+                // =====================================================
                 // VIRTUAL XBOX CONTROLLER
-                // -----------------------------------------------------
+                // =====================================================
 
                 xbox =
                     new VirtualXboxController();
 
 
-                await xbox.StartAsync();
+                await xbox
+                    .StartAsync();
 
 
-                // -----------------------------------------------------
-                // PHYSICAL STEAM CONTROLLER LISTENER
-                // -----------------------------------------------------
+                // =====================================================
+                // PHYSICAL HAPTICS
+                // =====================================================
+
+                haptics =
+                    new SteamControllerHaptics();
+
+
+                // =====================================================
+                // RAW INPUT LISTENER
+                // =====================================================
 
                 listener =
                     new SteamRawInputListener(
@@ -98,9 +152,9 @@ internal sealed class ScxiService :
                     );
 
 
-                // -----------------------------------------------------
+                // =====================================================
                 // STORE LIVE COMPONENTS
-                // -----------------------------------------------------
+                // =====================================================
 
                 _viiperManager =
                     viiperManager;
@@ -114,8 +168,38 @@ internal sealed class ScxiService :
                     listener;
 
 
+                _haptics =
+                    haptics;
+
+
+                System.Threading.Volatile.Write(
+                    ref _hapticsReady,
+                    0
+                );
+
+
                 IsRunning =
                     true;
+
+
+                // =====================================================
+                // PHYSICAL CONTROLLER EVENTS
+                // =====================================================
+
+                listener.ControllerConnected +=
+                    ControllerConnected;
+
+
+                listener.ControllerDisconnected +=
+                    ControllerDisconnected;
+
+
+                // =====================================================
+                // GAME RUMBLE FEEDBACK
+                // =====================================================
+
+                xbox.RumbleReceived +=
+                    RumbleReceived;
 
 
                 Console.WriteLine(
@@ -129,14 +213,32 @@ internal sealed class ScxiService :
             }
             catch
             {
-                // -----------------------------------------------------
+                // =====================================================
                 // PARTIAL STARTUP CLEANUP
-                // -----------------------------------------------------
+                // =====================================================
+
+                IsRunning =
+                    false;
+
+
+                System.Threading.Volatile.Write(
+                    ref _hapticsReady,
+                    0
+                );
+
 
                 if (listener is not null)
                 {
                     try
                     {
+                        listener.ControllerConnected -=
+                            ControllerConnected;
+
+
+                        listener.ControllerDisconnected -=
+                            ControllerDisconnected;
+
+
                         listener.Dispose();
                     }
                     catch
@@ -149,7 +251,33 @@ internal sealed class ScxiService :
                 {
                     try
                     {
-                        await xbox.DisposeAsync();
+                        xbox.RumbleReceived -=
+                            RumbleReceived;
+                    }
+                    catch
+                    {
+                    }
+                }
+
+
+                if (haptics is not null)
+                {
+                    try
+                    {
+                        haptics.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                }
+
+
+                if (xbox is not null)
+                {
+                    try
+                    {
+                        await xbox
+                            .DisposeAsync();
                     }
                     catch
                     {
@@ -167,12 +295,232 @@ internal sealed class ScxiService :
                 }
 
 
+                _listener =
+                    null;
+
+
+                _haptics =
+                    null;
+
+
+                _xbox =
+                    null;
+
+
+                _viiperManager =
+                    null;
+
+
                 throw;
             }
         }
         finally
         {
             _operationLock.Release();
+        }
+    }
+
+
+    // =================================================================
+    // PHYSICAL CONTROLLER CONNECTED
+    //
+    // Open the physical haptics interface and perform the short
+    // confirmation buzz.
+    //
+    // Game rumble is ignored until this sequence finishes successfully.
+    // =================================================================
+
+    private async void ControllerConnected(
+        string devicePath
+    )
+    {
+        SteamControllerHaptics? haptics =
+            _haptics;
+
+
+        if (haptics is null ||
+            !IsRunning)
+        {
+            return;
+        }
+
+
+        // Prevent game rumble from interfering
+        // with the connection confirmation buzz.
+        System.Threading.Volatile.Write(
+            ref _hapticsReady,
+            0
+        );
+
+
+        Console.WriteLine(
+            "[SCXI] Initializing physical controller haptics..."
+        );
+
+
+        try
+        {
+            bool success =
+                await haptics
+                    .TestBuzzAsync(
+                        devicePath
+                    );
+
+
+            if (!success)
+            {
+                Console.WriteLine(
+                    "[SCXI] Physical haptics unavailable."
+                );
+
+
+                try
+                {
+                    haptics.Close();
+                }
+                catch
+                {
+                }
+
+
+                return;
+            }
+
+
+            // The test buzz completed and the HID handle
+            // remains open. Game rumble may now use it.
+            System.Threading.Volatile.Write(
+                ref _hapticsReady,
+                1
+            );
+
+
+            Console.WriteLine(
+                "[SCXI] Physical haptics ready."
+            );
+
+
+            Console.WriteLine(
+                "[SCXI] Game rumble enabled."
+            );
+        }
+        catch (Exception ex)
+        {
+            System.Threading.Volatile.Write(
+                ref _hapticsReady,
+                0
+            );
+
+
+            Console.WriteLine(
+                "[SCXI] Physical haptics initialization error: " +
+                ex.Message
+            );
+
+
+            try
+            {
+                haptics.Close();
+            }
+            catch
+            {
+            }
+        }
+    }
+
+
+    // =================================================================
+    // PHYSICAL CONTROLLER DISCONNECTED
+    // =================================================================
+
+    private void ControllerDisconnected()
+    {
+        // Stop accepting game rumble immediately.
+        System.Threading.Volatile.Write(
+            ref _hapticsReady,
+            0
+        );
+
+
+        SteamControllerHaptics? haptics =
+            _haptics;
+
+
+        if (haptics is null)
+        {
+            return;
+        }
+
+
+        Console.WriteLine(
+            "[SCXI] Closing physical haptics connection."
+        );
+
+
+        try
+        {
+            haptics.Close();
+        }
+        catch
+        {
+        }
+    }
+
+
+    // =================================================================
+    // GAME RUMBLE RECEIVED
+    //
+    // Called by VirtualXboxController whenever VIIPER receives
+    // Xbox 360 force-feedback from the game.
+    //
+    // left/right are Xbox-style 0..255 motor strengths.
+    // =================================================================
+
+    private void RumbleReceived(
+        byte left,
+        byte right
+    )
+    {
+        if (!IsRunning)
+        {
+            return;
+        }
+
+
+        if (
+            System.Threading.Volatile.Read(
+                ref _hapticsReady
+            ) != 1
+        )
+        {
+            return;
+        }
+
+
+        SteamControllerHaptics? haptics =
+            _haptics;
+
+
+        if (haptics is null ||
+            !haptics.IsOpen)
+        {
+            return;
+        }
+
+
+        try
+        {
+            haptics.SetXboxRumble(
+                left,
+                right
+            );
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                "[SCXI] Physical rumble error: " +
+                ex.Message
+            );
         }
     }
 
@@ -191,7 +539,8 @@ internal sealed class ScxiService :
             if (!IsRunning &&
                 _listener is null &&
                 _xbox is null &&
-                _viiperManager is null)
+                _viiperManager is null &&
+                _haptics is null)
             {
                 return;
             }
@@ -206,13 +555,96 @@ internal sealed class ScxiService :
                 false;
 
 
-            // ---------------------------------------------------------
-            // RAW INPUT
-            // ---------------------------------------------------------
+            System.Threading.Volatile.Write(
+                ref _hapticsReady,
+                0
+            );
+
+
+            // =========================================================
+            // DISCONNECT EVENTS FIRST
+            //
+            // This prevents any new controller or rumble callbacks
+            // while shutdown is in progress.
+            // =========================================================
 
             SteamRawInputListener? listener =
                 _listener;
 
+
+            if (listener is not null)
+            {
+                try
+                {
+                    listener.ControllerConnected -=
+                        ControllerConnected;
+
+
+                    listener.ControllerDisconnected -=
+                        ControllerDisconnected;
+                }
+                catch
+                {
+                }
+            }
+
+
+            VirtualXboxController? xbox =
+                _xbox;
+
+
+            if (xbox is not null)
+            {
+                try
+                {
+                    xbox.RumbleReceived -=
+                        RumbleReceived;
+                }
+                catch
+                {
+                }
+            }
+
+
+            // =========================================================
+            // PHYSICAL HAPTICS
+            //
+            // Stop any physical vibration before destroying
+            // the virtual controller.
+            // =========================================================
+
+            SteamControllerHaptics? haptics =
+                _haptics;
+
+
+            _haptics =
+                null;
+
+
+            if (haptics is not null)
+            {
+                try
+                {
+                    haptics.StopRumble();
+                }
+                catch
+                {
+                }
+
+
+                try
+                {
+                    haptics.Dispose();
+                }
+                catch
+                {
+                }
+            }
+
+
+            // =========================================================
+            // RAW INPUT
+            // =========================================================
 
             _listener =
                 null;
@@ -230,13 +662,9 @@ internal sealed class ScxiService :
             }
 
 
-            // ---------------------------------------------------------
-            // VIRTUAL XBOX
-            // ---------------------------------------------------------
-
-            VirtualXboxController? xbox =
-                _xbox;
-
+            // =========================================================
+            // VIRTUAL XBOX CONTROLLER
+            // =========================================================
 
             _xbox =
                 null;
@@ -246,7 +674,8 @@ internal sealed class ScxiService :
             {
                 try
                 {
-                    await xbox.DisposeAsync();
+                    await xbox
+                        .DisposeAsync();
                 }
                 catch
                 {
@@ -254,9 +683,9 @@ internal sealed class ScxiService :
             }
 
 
-            // ---------------------------------------------------------
+            // =========================================================
             // VIIPER
-            // ---------------------------------------------------------
+            // =========================================================
 
             ViiperProcessManager? viiperManager =
                 _viiperManager;
