@@ -480,3 +480,18 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# SCXI build output
+bin/
+obj/
+dist/
+
+# Installer build output
+installer/output/
+
+# Downloaded third-party packaging binaries
+installer/dependencies/*.exe
+tools/viiper/viiper.exe
+
+# Third-party source archive used for installer packaging
+installer/licenses/VIIPER-v0.7.0-source.zip

@@ -16,17 +16,51 @@
     <ApplicationIcon>Assets\scxi-enabled.ico</ApplicationIcon>
   </PropertyGroup>
 
+
+  <!-- ============================================================= -->
+  <!-- NUGET PACKAGES                                                -->
+  <!-- ============================================================= -->
+
   <ItemGroup>
-    <PackageReference Include="Viiper.Client" Version="0.7.0" />
+    <PackageReference
+      Include="Viiper.Client"
+      Version="0.7.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Update="Assets\scxi-enabled.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
 
-    <None Update="Assets\scxi-disabled.ico">
+  <!-- ============================================================= -->
+  <!-- EMBED SCXI TRAY ICONS                                        -->
+  <!-- ============================================================= -->
+
+  <ItemGroup>
+    <None Remove="Assets\scxi-enabled.ico" />
+    <None Remove="Assets\scxi-disabled.ico" />
+
+    <EmbeddedResource
+      Include="Assets\scxi-enabled.ico"
+      LogicalName="SCXI.Assets.scxi-enabled.ico" />
+
+    <EmbeddedResource
+      Include="Assets\scxi-disabled.ico"
+      LogicalName="SCXI.Assets.scxi-disabled.ico" />
+  </ItemGroup>
+
+
+  <!-- ============================================================= -->
+  <!-- BUNDLED VIIPER SERVER                                        -->
+  <!--                                                               -->
+  <!-- Keep VIIPER outside the SCXI single-file bundle so it can     -->
+  <!-- be launched as its own executable from:                       -->
+  <!--                                                               -->
+  <!-- tools\viiper\viiper.exe                                      -->
+  <!-- ============================================================= -->
+
+  <ItemGroup>
+    <None Update="tools\viiper\viiper.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      <TargetPath>tools\viiper\viiper.exe</TargetPath>
     </None>
   </ItemGroup>
 

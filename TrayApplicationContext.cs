@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Reflection;
 using System.Windows.Forms;
 
 
@@ -105,18 +106,18 @@ internal sealed class TrayApplicationContext :
 
 
         // =============================================================
-        // LOAD ICONS
+        // LOAD EMBEDDED ICONS
         // =============================================================
 
         _enabledIcon =
-            LoadIcon(
-                "scxi-enabled.ico"
+            LoadEmbeddedIcon(
+                "SCXI.Assets.scxi-enabled.ico"
             );
 
 
         _disabledIcon =
-            LoadIcon(
-                "scxi-disabled.ico"
+            LoadEmbeddedIcon(
+                "SCXI.Assets.scxi-disabled.ico"
             );
 
 
@@ -252,10 +253,8 @@ internal sealed class TrayApplicationContext :
         );
 
 
-        // Re-read the registry whenever the user opens the menu.
-        //
-        // This keeps the checkbox accurate even if the Windows
-        // startup entry is changed outside SCXI.
+        // Keep the startup checkbox synchronized
+        // with the actual Windows registry value.
         _menu.Opening +=
             Menu_Opening;
 
@@ -283,9 +282,6 @@ internal sealed class TrayApplicationContext :
 
         // =============================================================
         // STARTUP TIMER
-        //
-        // Allows the WinForms message loop to begin before applying
-        // the remembered Enabled preference.
         // =============================================================
 
         _startupTimer =
@@ -324,34 +320,37 @@ internal sealed class TrayApplicationContext :
 
 
     // =================================================================
-    // ICON LOADER
+    // EMBEDDED ICON LOADER
+    //
+    // Icons are stored inside SCXI.exe.
+    // No external Assets folder is required in the published build.
     // =================================================================
 
-    private static Icon LoadIcon(
-        string fileName
+    private static Icon LoadEmbeddedIcon(
+        string resourceName
     )
     {
-        string path =
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "Assets",
-                fileName
+        Assembly assembly =
+            Assembly.GetExecutingAssembly();
+
+
+        using Stream? stream =
+            assembly.GetManifestResourceStream(
+                resourceName
             );
 
 
-        if (!File.Exists(
-                path
-            ))
+        if (stream is null)
         {
+            Console.WriteLine(
+                "[SCXI] Embedded icon not found: " +
+                resourceName
+            );
+
+
             return (Icon)
                 SystemIcons.Application.Clone();
         }
-
-
-        using var stream =
-            File.OpenRead(
-                path
-            );
 
 
         using var icon =
@@ -396,7 +395,6 @@ internal sealed class TrayApplicationContext :
             );
 
 
-            // Do not start VIIPER.
             UpdateVisualState();
         }
     }
@@ -431,8 +429,6 @@ internal sealed class TrayApplicationContext :
         System.ComponentModel.CancelEventArgs e
     )
     {
-        // Windows registry is the source of truth
-        // for the startup setting.
         _startWithWindowsItem.Checked =
             StartupManager.IsEnabled();
     }
@@ -483,10 +479,6 @@ internal sealed class TrayApplicationContext :
 
         try
         {
-            // =========================================================
-            // ENABLE
-            // =========================================================
-
             if (enabled)
             {
                 _statusItem.Text =
@@ -505,11 +497,6 @@ internal sealed class TrayApplicationContext :
                 await _service
                     .StartAsync();
             }
-
-            // =========================================================
-            // DISABLE
-            // =========================================================
-
             else
             {
                 _statusItem.Text =
@@ -529,10 +516,6 @@ internal sealed class TrayApplicationContext :
                     .StopAsync();
             }
 
-
-            // =========================================================
-            // SAVE ENABLED PREFERENCE
-            // =========================================================
 
             if (savePreference)
             {
@@ -621,8 +604,6 @@ internal sealed class TrayApplicationContext :
 
         if (!success)
         {
-            // Re-read actual state in case Windows rejected
-            // the requested change.
             _startWithWindowsItem.Checked =
                 StartupManager.IsEnabled();
 
@@ -639,8 +620,6 @@ internal sealed class TrayApplicationContext :
         }
 
 
-        // Confirm actual registry state rather than assuming
-        // the write succeeded exactly as expected.
         _startWithWindowsItem.Checked =
             StartupManager.IsEnabled();
 
@@ -963,12 +942,6 @@ internal sealed class TrayApplicationContext :
         catch
         {
         }
-
-
-        // Quitting does NOT change:
-        //
-        // - remembered Enabled/Disabled state
-        // - Start with Windows registry setting
 
 
         _notifyIcon.Visible =
