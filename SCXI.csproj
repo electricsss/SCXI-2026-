@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+
     <OutputType>WinExe</OutputType>
 
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -13,7 +14,19 @@
     <AssemblyName>SCXI</AssemblyName>
     <RootNamespace>SCXI</RootNamespace>
 
+    <!-- ============================================================= -->
+    <!-- VERSION                                                       -->
+    <!-- ============================================================= -->
+
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+
+    <Product>SCXI</Product>
+    <Description>Steam Controller XInput Bridge</Description>
+
     <ApplicationIcon>Assets\scxi-enabled.ico</ApplicationIcon>
+
   </PropertyGroup>
 
 
@@ -22,9 +35,11 @@
   <!-- ============================================================= -->
 
   <ItemGroup>
+
     <PackageReference
       Include="Viiper.Client"
       Version="0.7.0" />
+
   </ItemGroup>
 
 
@@ -33,6 +48,7 @@
   <!-- ============================================================= -->
 
   <ItemGroup>
+
     <None Remove="Assets\scxi-enabled.ico" />
     <None Remove="Assets\scxi-disabled.ico" />
 
@@ -43,25 +59,36 @@
     <EmbeddedResource
       Include="Assets\scxi-disabled.ico"
       LogicalName="SCXI.Assets.scxi-disabled.ico" />
+
   </ItemGroup>
 
 
   <!-- ============================================================= -->
   <!-- BUNDLED VIIPER SERVER                                        -->
-  <!--                                                               -->
-  <!-- Keep VIIPER outside the SCXI single-file bundle so it can     -->
-  <!-- be launched as its own executable from:                       -->
-  <!--                                                               -->
-  <!-- tools\viiper\viiper.exe                                      -->
   <!-- ============================================================= -->
 
   <ItemGroup>
+
     <None Update="tools\viiper\viiper.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
-      <TargetPath>tools\viiper\viiper.exe</TargetPath>
+
+      <CopyToOutputDirectory>
+        PreserveNewest
+      </CopyToOutputDirectory>
+
+      <CopyToPublishDirectory>
+        PreserveNewest
+      </CopyToPublishDirectory>
+
+      <ExcludeFromSingleFile>
+        true
+      </ExcludeFromSingleFile>
+
+      <TargetPath>
+        tools\viiper\viiper.exe
+      </TargetPath>
+
     </None>
+
   </ItemGroup>
 
 </Project>
