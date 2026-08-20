@@ -3,21 +3,16 @@
   <PropertyGroup>
 
     <OutputType>WinExe</OutputType>
-
     <TargetFramework>net10.0-windows</TargetFramework>
 
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-
     <UseWindowsForms>true</UseWindowsForms>
 
     <AssemblyName>SCXI</AssemblyName>
     <RootNamespace>SCXI</RootNamespace>
 
-    <!-- ============================================================= -->
-    <!-- VERSION                                                       -->
-    <!-- ============================================================= -->
-
+    <!-- Version -->
     <Version>0.1.0</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>
@@ -30,9 +25,7 @@
   </PropertyGroup>
 
 
-  <!-- ============================================================= -->
-  <!-- NUGET PACKAGES                                                -->
-  <!-- ============================================================= -->
+  <!-- NuGet packages -->
 
   <ItemGroup>
 
@@ -43,9 +36,7 @@
   </ItemGroup>
 
 
-  <!-- ============================================================= -->
-  <!-- EMBED SCXI TRAY ICONS                                        -->
-  <!-- ============================================================= -->
+  <!-- Embedded SCXI tray icons -->
 
   <ItemGroup>
 
@@ -63,31 +54,22 @@
   </ItemGroup>
 
 
-  <!-- ============================================================= -->
-  <!-- BUNDLED VIIPER SERVER                                        -->
-  <!-- ============================================================= -->
+  <!-- Bundled VIIPER server -->
 
   <ItemGroup>
 
-    <None Update="tools\viiper\viiper.exe">
+    <None Remove="tools\viiper\viiper.exe" />
 
-      <CopyToOutputDirectory>
-        PreserveNewest
-      </CopyToOutputDirectory>
+    <Content Include="tools\viiper\viiper.exe">
 
-      <CopyToPublishDirectory>
-        PreserveNewest
-      </CopyToPublishDirectory>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
 
-      <ExcludeFromSingleFile>
-        true
-      </ExcludeFromSingleFile>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
 
-      <TargetPath>
-        tools\viiper\viiper.exe
-      </TargetPath>
+      <TargetPath>tools\viiper\viiper.exe</TargetPath>
 
-    </None>
+    </Content>
 
   </ItemGroup>
 
